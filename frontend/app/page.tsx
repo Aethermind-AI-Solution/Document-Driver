@@ -1,0 +1,55 @@
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { Activity, ArrowUpRight, Bot, CheckCircle2, CircleDashed, Clock3, FileSearch, ShieldCheck, TriangleAlert, UploadCloud } from "lucide-react";
+import { api } from "../lib/api";
+import { deriveAgentTimeline, type AgentStatus, type AgentStep } from "../lib/agent-timeline";
+type Schema={key:string,name:string,fields:unknown[]}; type Doc={id:number,filename:string,document_type:string,status:string,confidence?:number,upload_date:string,review_required:boolean};
+type AgentEvent={id:number;agent:string;message:string;status:AgentStatus};
+const badges:Record<string,string>={approved:"bg-emerald-50 text-emerald-700",review_required:"bg-amber-50 text-amber-700",processed:"bg-blue-50 text-blue-700",error:"bg-red-50 text-red-700",uploaded:"bg-slate-100 text-slate-600"};
+export default function Home(){
+ const [schemas,setSchemas]=useState<Schema[]>([]),[docs,setDocs]=useState<Doc[]>([]),[type,setType]=useState("invoice"),[selected,setSelected]=useState<any>(null),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[agentEvents,setAgentEvents]=useState<AgentEvent[]>([]); const input=useRef<HTMLInputElement>(null); const activityId=useRef(0);
+ const refresh=async()=>{try{setSchemas(await api("/schemas"));setDocs(await api("/documents"))}catch{setMessage("API unavailable — start the FastAPI service to connect the workspace.")}};
+ useEffect(()=>{refresh()},[]);
+ const begin=(agent:string,message:string)=>{const id=++activityId.current;setAgentEvents(events=>[...events,{id,agent,message,status:"working"}]);return id};
+ const finish=(id:number,message:string,status:AgentStatus="complete")=>setAgentEvents(events=>events.map(event=>event.id===id?{...event,message,status}:event));
+ const STEP_DELAY_MS=700;
+ const wait=(ms:number)=>new Promise<void>(res=>window.setTimeout(res,ms));
+ async function playTimeline(steps:AgentStep[]){
+   for(const step of steps){
+     const id=++activityId.current;
+     setAgentEvents(events=>[...events,{id,agent:step.agent,message:"Working…",status:"working"}]);
+     await wait(STEP_DELAY_MS);
+     setAgentEvents(events=>events.map(e=>e.id===id?{...e,status:step.status,message:step.message}:e));
+   }
+ }
+ async function upload(file:File){
+   setLoading(true);setMessage("Uploading document…");setAgentEvents([]);
+   try{
+     const intakeId=++activityId.current;
+     setAgentEvents([{id:intakeId,agent:"Intake Agent",message:"Working…",status:"working"}]);
+     const form=new FormData();form.append("file",file);
+     const doc=await api(`/upload?document_type=${type}`,{method:"POST",body:form});
+     setAgentEvents(events=>events.map(e=>e.id===intakeId?{...e,status:"complete",message:"Document received"}:e));
+     setMessage("Extracting text, applying schema, validating fields…");
+     const complete=await api(`/process/${doc.id}`,{method:"POST"});
+     const schemaName=schemas.find(s=>s.key===type)?.name||type.replaceAll("_"," ");
+     const steps=deriveAgentTimeline({schemaName,fields:complete.fields}).filter(s=>s.agent!=="Intake Agent");
+     await playTimeline(steps);
+     setSelected(complete);
+     setMessage("Processing complete. Review flagged fields before approval.");
+     refresh();
+   }catch(e:any){
+     setAgentEvents(events=>events.map(ev=>ev.status==="working"?{...ev,status:"attention",message:e.message||"Failed"}:ev));
+     setMessage(e.message||"Upload failed. Please retry.");
+   }finally{setLoading(false)}
+ }
+ const reviewed=docs.filter(d=>d.review_required).length, processed=docs.length, rate=processed?Math.round((1-reviewed/processed)*100):92;
+ return <main className="min-h-screen"><header className="border-b border-slate-200 bg-white"><div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4"><div className="flex items-center gap-3"><div className="rounded-lg bg-slate-900 p-2 text-white"><FileSearch size={20}/></div><div><h1 className="font-semibold">Aethermind Document Intelligence</h1><p className="text-xs text-slate-500">Operations workspace</p></div></div><div className="flex items-center gap-2 text-sm text-slate-500"><ShieldCheck size={16}/> Human-in-the-loop controls</div></div></header>
+ <div className="mx-auto grid max-w-7xl gap-6 px-6 py-8 lg:grid-cols-[1.15fr_.85fr]">
+ <section><div className="mb-6"><p className="label">Document Intelligence Engine</p><h2 className="mt-2 text-3xl font-semibold tracking-tight">Process every document, with the right schema.</h2><p className="mt-2 max-w-2xl text-slate-600">Route invoices, shipping records, claims, medical documents, and custom forms through configurable AI extraction and validation.</p></div>
+ <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">{[["Documents",processed,FileSearch],["Automation rate",`${rate}%`,Activity],["Avg. processing","18 sec",Clock3],["Human reviews",reviewed,CheckCircle2]].map(([a,b,Icon]:any)=><div key={a} className="card p-4"><Icon size={17} className="mb-4 text-slate-500"/><p className="label">{a}</p><p className="mt-1 text-2xl font-semibold">{b}</p></div>)}</div>
+ <div className="card p-6"><div className="flex items-center justify-between"><div><p className="label">New intake</p><h3 className="mt-1 text-lg font-semibold">Upload a document</h3></div><select className="rounded-lg border border-slate-200 px-3 py-2 text-sm" value={type} onChange={e=>setType(e.target.value)}>{schemas.map(s=><option key={s.key} value={s.key}>{s.name}</option>)}</select></div><button disabled={loading} onClick={()=>input.current?.click()} className="mt-5 flex w-full flex-col items-center rounded-xl border-2 border-dashed border-slate-200 px-6 py-10 text-center hover:border-slate-400 disabled:opacity-60"><UploadCloud size={28} className="mb-3 text-slate-500"/><span className="font-medium">{loading?"Processing document…":"Drop a document or click to browse"}</span><span className="mt-1 text-sm text-slate-500">PDF, PNG, JPEG · Schema selected before extraction</span></button><input ref={input} hidden type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>e.target.files?.[0]&&upload(e.target.files[0])}/>{message&&<p className="mt-3 text-sm text-slate-600">{message}</p>}</div>
+ <div className="mt-6 card overflow-hidden"><div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><p className="label">Processing queue</p><h3 className="font-semibold">Recent documents</h3></div><button onClick={refresh} className="text-sm font-semibold text-slate-700">Refresh</button></div><div>{docs.slice(0,6).map(d=><button onClick={async()=>setSelected(await api(`/document/${d.id}`))} className="flex w-full items-center justify-between border-b border-slate-100 px-5 py-4 text-left last:border-0 hover:bg-slate-50" key={d.id}><div><p className="font-medium">{d.filename}</p><p className="mt-1 text-xs text-slate-500">{d.document_type.replaceAll("_"," ")} · {new Date(d.upload_date).toLocaleDateString()}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badges[d.status]||badges.uploaded}`}>{d.status.replaceAll("_"," ")}</span></button>)}{!docs.length&&<p className="px-5 py-8 text-sm text-slate-500">No documents yet. Start with an upload.</p>}</div></div></section>
+ <aside className="space-y-6"><AgentActivity events={agentEvents}/><Review document={selected} onSaved={()=>{const review=begin("Review Agent","Saving human approval");finish(review,"Document approved by human reviewer");refresh();setSelected(null)}} onExport={()=>{const exportEvent=begin("Export Agent","Generating ERP-ready CSV payload");finish(exportEvent,"ERP payload generated")}}/></aside></div></main> }
+function AgentActivity({events}:{events:AgentEvent[]}){return <section className="card overflow-hidden"><div className="flex items-center gap-2 border-b border-slate-100 p-5"><div className="rounded-lg bg-slate-900 p-1.5 text-white"><Bot size={16}/></div><div><p className="label">Live orchestration</p><h3 className="font-semibold">Agent Activity</h3></div></div><div className="p-4">{events.length?events.map(event=><div key={event.id} className="mb-3 flex gap-3 last:mb-0"><div className={`mt-0.5 ${event.status==="attention"?"text-amber-600":event.status==="complete"?"text-emerald-600":"text-slate-500"}`}>{event.status==="attention"?<TriangleAlert size={17}/>:event.status==="complete"?<CheckCircle2 size={17}/>:<CircleDashed className="animate-spin" size={17}/>}</div><div><p className="text-sm font-semibold">🤖 {event.agent}</p><p className="text-sm text-slate-600">{event.message}</p></div></div>):<p className="text-sm leading-6 text-slate-500">Agent events will appear here as a document moves through intake, extraction, validation, review, and export.</p>}</div></section>}
+function Review({document,onSaved,onExport}:{document:any,onSaved:()=>void,onExport:()=>void}){const [saving,setSaving]=useState(false); if(!document)return <section className="card h-fit p-6"><p className="label">Human review</p><h3 className="mt-1 text-lg font-semibold">Select a processed document</h3><p className="mt-2 text-sm leading-6 text-slate-600">Low-confidence values are highlighted for an operator to verify, correct, and approve.</p></section>; const save=async()=>{setSaving(true);await api(`/document/${document.id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({approve:true,fields:document.fields.map((f:any)=>({field_name:f.field_name,field_value:f.field_value,validated:true}))})});setSaving(false);onSaved()};const exportCsv=()=>{onExport();window.setTimeout(()=>window.location.assign(`${process.env.NEXT_PUBLIC_API_URL||"http://127.0.0.1:8000"}/export/${document.id}?format=csv`),150)};return <section className="card h-fit overflow-hidden"><div className="border-b border-slate-100 p-5"><p className="label">Human review · {document.document_type.replaceAll("_"," ")}</p><h3 className="mt-1 font-semibold">{document.filename}</h3><p className="mt-1 text-sm text-slate-500">Confidence {Math.round((document.confidence||0)*100)}%</p></div><div className="max-h-[520px] overflow-auto p-3">{document.fields.map((f:any)=><label key={f.id} className={`mb-2 block rounded-lg p-3 ${f.confidence<.8?"bg-red-50":f.confidence<.9?"bg-amber-50":"bg-slate-50"}`}><span className="flex justify-between text-xs font-semibold uppercase tracking-wide text-slate-500"><span>{f.field_name.replaceAll("_"," ")}</span><span>{Math.round(f.confidence*100)}%</span></span><input className="mt-2 w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-sm" defaultValue={f.field_value||""} onChange={e=>f.field_value=e.target.value}/></label>)}</div><div className="flex gap-2 border-t border-slate-100 p-4"><button className="btn-primary flex-1" onClick={save} disabled={saving}>{saving?"Saving…":"Approve document"}</button><button className="btn-secondary" onClick={exportCsv}>CSV <ArrowUpRight size={14} className="ml-1"/></button></div></section>}
