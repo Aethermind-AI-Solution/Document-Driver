@@ -2,7 +2,7 @@ import base64, json, os, re, time
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
-from .config import OPENAI_MODEL
+from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
 
@@ -87,6 +87,33 @@ def openai_extract(text: str, fields: list[dict], source_path: str):
     if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
     response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
     return _fields_from_data(json.loads(response.output_text), fields)
+
+def gemini_extract(text: str, fields: list[dict], source_path: str):
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        path = Path(source_path)
+        mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower(), "application/pdf")
+        properties = {f["name"]: types.Schema(type=types.Type.STRING, nullable=True, description=f.get("label", f["name"])) for f in fields}
+        schema = types.Schema(type=types.Type.OBJECT, properties=properties)
+        contents = ["Extract the requested fields from this document. Use null when a value is absent; do not guess.",
+                    types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)]
+        if text:
+            contents.append("Extracted text for reference:\n" + text[:50000])
+        response = client.models.generate_content(
+            model=GEMINI_MODEL, contents=contents,
+            config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema))
+        return _fields_from_data(json.loads(response.text), fields)
+    except Exception:
+        return fallback_extract(text, fields)
+
+def ai_extract(text: str, fields: list[dict], source_path: str):
+    if os.getenv("GEMINI_API_KEY"):
+        return gemini_extract(text, fields, source_path)
+    if os.getenv("OPENAI_API_KEY"):
+        return openai_extract(text, fields, source_path)
+    return fallback_extract(text, fields)
 
 def process_document(db: Session, document: Document):
     started = time.perf_counter(); document.status = "processing"; db.commit()

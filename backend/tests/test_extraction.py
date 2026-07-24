@@ -28,3 +28,22 @@ def test_empty_or_whitespace_string_is_absent():
 def test_non_dict_data_all_absent():
     out = _fields_from_data(None, FIELDS)
     assert all(o["field_value"] is None and o["confidence"] == 0.55 for o in out)
+
+
+from app.services import ai_extract, gemini_extract
+
+
+def test_gemini_falls_back_to_regex_on_error(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "dummy")
+    fields = [{"name": "invoice_number", "label": "Invoice Number"}]
+    # nonexistent path forces an internal error before any network call → regex fallback
+    out = gemini_extract("Invoice No: INV-9", fields, "/does/not/exist.pdf")
+    assert out[0]["field_name"] == "invoice_number"
+    assert out[0]["field_value"] == "INV-9"   # regex fallback found it in the text
+
+
+def test_ai_extract_uses_fallback_without_keys(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    out = ai_extract("Total: 500", [{"name": "total", "label": "Total"}], "/x.pdf")
+    assert out[0]["field_value"] == "500"
