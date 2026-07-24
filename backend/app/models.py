@@ -1,0 +1,43 @@
+from datetime import datetime
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .database import Base
+
+class Document(Base):
+    __tablename__ = "documents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    document_type: Mapped[str] = mapped_column(String(80), default="invoice")
+    upload_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(40), default="uploaded")
+    processing_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    review_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    stored_path: Mapped[str] = mapped_column(Text)
+    extracted_fields: Mapped[list["ExtractedField"]] = relationship(cascade="all, delete-orphan")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(cascade="all, delete-orphan")
+
+class ExtractedField(Base):
+    __tablename__ = "extracted_fields"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
+    field_name: Mapped[str] = mapped_column(String(120))
+    field_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    edited_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
+    action: Mapped[str] = mapped_column(String(120))
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+class SchemaDefinition(Base):
+    __tablename__ = "schema_definitions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    fields: Mapped[list] = mapped_column(JSON)

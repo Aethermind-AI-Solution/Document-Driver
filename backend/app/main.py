@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from .config import UPLOAD_DIR
+from .config import CORS_ORIGINS, UPLOAD_DIR
 from .database import Base, engine, get_db
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
 from .schemas import DocumentUpdate, SchemaPayload
@@ -15,7 +15,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

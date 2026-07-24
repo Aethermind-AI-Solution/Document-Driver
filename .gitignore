@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+backend/.venv/
+.venv/
+.npm/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+
+# builds / caches
+dist/
+frontend/.next/
+frontend/out/
+frontend/.vercel/
+coverage/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# ephemeral runtime data (do not commit generated data; keep the empty dirs)
+database/*.db
+uploads/*
+exports/*
+!uploads/.gitkeep
+!exports/.gitkeep
+!database/.gitkeep
+
+# tooling scratch
+.superpowers/
+
+# os
+.DS_Store
