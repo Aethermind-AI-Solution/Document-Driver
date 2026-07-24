@@ -14,3 +14,17 @@ export async function api(path: string, init: RequestInit = {}) {
   if (!r.ok) { const e: any = new Error(await r.text()); e.status = r.status; throw e; }
   return r.json();
 }
+
+export async function downloadFile(path: string, filename: string) {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["X-Access-Token"] = token;
+  const r = await fetch(`${API}${path}`, { headers });
+  if (r.status === 401) { clearToken(); const e: any = new Error("Unauthorized"); e.status = 401; throw e; }
+  if (!r.ok) { const e: any = new Error(await r.text()); e.status = r.status; throw e; }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  a.remove(); URL.revokeObjectURL(url);
+}

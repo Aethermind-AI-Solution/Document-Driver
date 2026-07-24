@@ -9,6 +9,7 @@ vi.mock("../lib/api", () => ({
   getToken: () => "",
   setToken: vi.fn(() => { gated = false; }),   // "logging in" opens the gate
   clearToken: vi.fn(),
+  downloadFile: vi.fn(),
   api: vi.fn(async (path: string) => {
     if (gated) { const e: any = new Error("Unauthorized"); e.status = 401; throw e; }
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
