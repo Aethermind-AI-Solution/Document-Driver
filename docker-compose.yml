@@ -1,0 +1,19 @@
+services:
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: sqlite:////data/document_intelligence.db
+      UPLOAD_DIR: /data/uploads
+      EXPORT_DIR: /data/exports
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5}
+    volumes: ["./database:/data", "./uploads:/data/uploads", "./exports:/data/exports", "./backend:/app"]
+  web:
+    build: ./frontend
+    command: npm run dev
+    ports: ["3000:3000"]
+    environment: ["NEXT_PUBLIC_API_URL=http://localhost:8000"]
+    volumes: ["./frontend:/app", "/app/node_modules"]
+    depends_on: [api]

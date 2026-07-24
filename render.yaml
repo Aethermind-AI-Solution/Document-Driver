@@ -1,0 +1,26 @@
+# Render Blueprint — deploys the Aethermind FastAPI backend.
+# Spec: https://render.com/docs/blueprint-spec
+# The Next.js frontend is deployed separately on Vercel (see docs/deployment.md).
+# If Render rejects `runtime:`, use `env: python` instead (older Blueprint field name).
+services:
+  - type: web
+    name: aethermind-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Set to your deployed frontend origin, e.g. https://aethermind.vercel.app
+      # (comma-separated for multiple). Without it, only localhost is allowed.
+      - key: CORS_ORIGINS
+        sync: false
+      # Optional. Leave blank to use deterministic fallback extraction (no key needed).
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5
