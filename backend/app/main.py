@@ -5,14 +5,16 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from .config import CORS_ORIGINS, UPLOAD_DIR
+from .config import CORS_ORIGINS
+from . import config
+from .security import rate_limit, require_access
 from .database import Base, engine, get_db
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
 from .schemas import DocumentUpdate, SchemaPayload
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
 
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
+app = FastAPI(title="Document Intelligence Engine", version="1.0.0", dependencies=[Depends(require_access)])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -34,19 +36,21 @@ def create_schema(payload: SchemaPayload, db: Session = Depends(get_db)):
     if payload.key in [s["key"] for s in available_schemas(db)]: raise HTTPException(409, "Schema key already exists")
     item = SchemaDefinition(**payload.model_dump()); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
 
-@app.post("/upload", status_code=201)
+@app.post("/upload", status_code=201, dependencies=[Depends(rate_limit)])
 async def upload(file: UploadFile = File(...), document_type: str = "invoice", db: Session = Depends(get_db)):
     if Path(file.filename or "").suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}: raise HTTPException(400, "Only PDF, PNG, and JPEG are supported")
     try: schema_for(db, document_type)
     except ValueError as exc: raise HTTPException(400, str(exc))
+    data = await file.read()
+    if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, f"File exceeds the {config.MAX_UPLOAD_MB} MB limit")
     safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
-    destination = UPLOAD_DIR / safe_name
-    with destination.open("wb") as out: shutil.copyfileobj(file.file, out)
+    destination = config.UPLOAD_DIR / safe_name
+    destination.write_bytes(data)
     doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=str(destination))
     db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}"); db.commit(); db.refresh(doc)
     return serialize(doc)
 
-@app.post("/process/{document_id}")
+@app.post("/process/{document_id}", dependencies=[Depends(rate_limit)])
 def process(document_id: int, db: Session = Depends(get_db)):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")

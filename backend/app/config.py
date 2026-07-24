@@ -18,6 +18,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 # local dev; in production set CORS_ORIGINS to the deployed frontend URL(s),
 # e.g. "https://aethermind.vercel.app".
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
+DEMO_ACCESS_TOKEN = os.getenv("DEMO_ACCESS_TOKEN", "")   # empty ⇒ gate disabled
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "20"))
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
 for directory in (UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 # Fresh deployments start with an empty tree, so make sure the SQLite database
