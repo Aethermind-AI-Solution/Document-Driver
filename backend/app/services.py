@@ -1,4 +1,4 @@
-import base64, json, re, time
+import base64, json, os, re, time
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
@@ -62,12 +62,19 @@ def passes_validation(field: dict, value: str | None) -> bool:
         return False
     return True
 
-def ai_extract(text: str, fields: list[dict], source_path: str):
-    # API use is opt-in; deterministic local extraction keeps the MVP runnable without credentials.
-    import os
-    if not os.getenv("OPENAI_API_KEY"): return fallback_extract(text, fields)
+def _fields_from_data(data, fields, present=0.94, absent=0.55):
+    d = data if isinstance(data, dict) else {}
+    out = []
+    for f in fields:
+        v = d.get(f["name"])
+        if isinstance(v, str) and not v.strip():
+            v = None
+        out.append({"field_name": f["name"], "field_value": str(v) if v is not None else None,
+                    "confidence": present if v is not None else absent})
+    return out
+
+def openai_extract(text: str, fields: list[dict], source_path: str):
     from openai import OpenAI
-    shape = {f["name"]: "extracted value or null" for f in fields}
     client = OpenAI()
     properties = {f["name"]: {"type": ["string", "null"], "description": f.get("label", f["name"])} for f in fields}
     content = [{"type": "input_text", "text": "Extract all requested values. Use null when a value is absent."}]
@@ -79,8 +86,7 @@ def ai_extract(text: str, fields: list[dict], source_path: str):
         content.append({"type":"input_file", "filename":path.name, "file_data":f"data:application/pdf;base64,{encoded}"})
     if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
     response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
-    data = json.loads(response.output_text)
-    return [{"field_name": f["name"], "field_value": str(data.get(f["name"])) if data.get(f["name"]) is not None else None, "confidence": 0.94 if data.get(f["name"]) else 0.55} for f in fields]
+    return _fields_from_data(json.loads(response.output_text), fields)
 
 def process_document(db: Session, document: Document):
     started = time.perf_counter(); document.status = "processing"; db.commit()
