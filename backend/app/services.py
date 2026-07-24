@@ -105,7 +105,9 @@ def gemini_extract(text: str, fields: list[dict], source_path: str):
             model=GEMINI_MODEL, contents=contents,
             config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema))
         return _fields_from_data(json.loads(response.text), fields)
-    except Exception:
+    except Exception as exc:
+        import sys
+        print(f"[gemini_extract] falling back to regex — Gemini error: {exc!r}", file=sys.stderr, flush=True)
         return fallback_extract(text, fields)
 
 def ai_extract(text: str, fields: list[dict], source_path: str):
