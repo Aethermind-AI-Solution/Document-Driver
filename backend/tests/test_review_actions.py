@@ -39,3 +39,15 @@ def test_unknown_action_defaults_to_save():
     out = resolve_review_action("bogus", None)
     assert out["status"] is None
     assert out["log_action"] == "Edited"
+
+
+def test_reject_with_whitespace_reason_uses_default():
+    assert resolve_review_action("reject", "   ")["log_details"] == "No reason given"
+
+
+def test_save_with_whitespace_reason_uses_default():
+    assert resolve_review_action("save", "  \n ")["log_details"] == "Review values updated"
+
+
+def test_reason_is_trimmed():
+    assert resolve_review_action("reject", "  blurry scan  ")["log_details"] == "blurry scan"

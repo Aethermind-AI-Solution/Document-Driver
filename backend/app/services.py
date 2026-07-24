@@ -14,6 +14,7 @@ def resolve_review_action(action: str, reason: str | None) -> dict:
 
     status/review_required of None mean "leave the document's value unchanged".
     """
+    reason = (reason or "").strip() or None
     if action == "approve":
         return {"status": "approved", "review_required": False,
                 "log_action": "Approved", "log_details": "Human review completed"}
