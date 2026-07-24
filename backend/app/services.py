@@ -74,19 +74,24 @@ def _fields_from_data(data, fields, present=0.94, absent=0.55):
     return out
 
 def openai_extract(text: str, fields: list[dict], source_path: str):
-    from openai import OpenAI
-    client = OpenAI()
-    properties = {f["name"]: {"type": ["string", "null"], "description": f.get("label", f["name"])} for f in fields}
-    content = [{"type": "input_text", "text": "Extract all requested values. Use null when a value is absent."}]
-    path = Path(source_path)
-    encoded = base64.b64encode(path.read_bytes()).decode()
-    if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-        content.append({"type":"input_image", "image_url":f"data:image/{path.suffix[1:]};base64,{encoded}"})
-    else:
-        content.append({"type":"input_file", "filename":path.name, "file_data":f"data:application/pdf;base64,{encoded}"})
-    if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
-    response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
-    return _fields_from_data(json.loads(response.output_text), fields)
+    try:
+        from openai import OpenAI
+        client = OpenAI()
+        properties = {f["name"]: {"type": ["string", "null"], "description": f.get("label", f["name"])} for f in fields}
+        content = [{"type": "input_text", "text": "Extract all requested values. Use null when a value is absent."}]
+        path = Path(source_path)
+        encoded = base64.b64encode(path.read_bytes()).decode()
+        if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+            content.append({"type":"input_image", "image_url":f"data:image/{path.suffix[1:]};base64,{encoded}"})
+        else:
+            content.append({"type":"input_file", "filename":path.name, "file_data":f"data:application/pdf;base64,{encoded}"})
+        if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
+        response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
+        return _fields_from_data(json.loads(response.output_text), fields)
+    except Exception as exc:
+        import sys
+        print(f"[openai_extract] falling back to regex — OpenAI error: {exc!r}", file=sys.stderr, flush=True)
+        return fallback_extract(text, fields)
 
 def gemini_extract(text: str, fields: list[dict], source_path: str):
     try:
