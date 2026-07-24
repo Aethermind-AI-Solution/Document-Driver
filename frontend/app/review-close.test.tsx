@@ -20,6 +20,9 @@ const processedDoc = {
 let approved = false;
 
 vi.mock("../lib/api", () => ({
+  getToken: () => "",
+  setToken: () => {},
+  clearToken: () => {},
   api: vi.fn(async (path: string, init?: any) => {
     const method = init?.method || "GET";
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
