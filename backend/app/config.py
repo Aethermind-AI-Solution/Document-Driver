@@ -14,6 +14,7 @@ if DATABASE_URL.startswith("sqlite:///./"):
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", ROOT / "uploads"))
 EXPORT_DIR = Path(os.getenv("EXPORT_DIR", ROOT / "exports"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 # Comma-separated list of browser origins allowed to call the API. Defaults to
 # local dev; in production set CORS_ORIGINS to the deployed frontend URL(s),
 # e.g. "https://aethermind.vercel.app".

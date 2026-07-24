@@ -1,8 +1,8 @@
-import base64, json, re, time
+import base64, json, os, re, time
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
-from .config import OPENAI_MODEL
+from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
 
@@ -62,12 +62,19 @@ def passes_validation(field: dict, value: str | None) -> bool:
         return False
     return True
 
-def ai_extract(text: str, fields: list[dict], source_path: str):
-    # API use is opt-in; deterministic local extraction keeps the MVP runnable without credentials.
-    import os
-    if not os.getenv("OPENAI_API_KEY"): return fallback_extract(text, fields)
+def _fields_from_data(data, fields, present=0.94, absent=0.55):
+    d = data if isinstance(data, dict) else {}
+    out = []
+    for f in fields:
+        v = d.get(f["name"])
+        if isinstance(v, str) and not v.strip():
+            v = None
+        out.append({"field_name": f["name"], "field_value": str(v) if v is not None else None,
+                    "confidence": present if v is not None else absent})
+    return out
+
+def openai_extract(text: str, fields: list[dict], source_path: str):
     from openai import OpenAI
-    shape = {f["name"]: "extracted value or null" for f in fields}
     client = OpenAI()
     properties = {f["name"]: {"type": ["string", "null"], "description": f.get("label", f["name"])} for f in fields}
     content = [{"type": "input_text", "text": "Extract all requested values. Use null when a value is absent."}]
@@ -79,8 +86,34 @@ def ai_extract(text: str, fields: list[dict], source_path: str):
         content.append({"type":"input_file", "filename":path.name, "file_data":f"data:application/pdf;base64,{encoded}"})
     if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
     response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
-    data = json.loads(response.output_text)
-    return [{"field_name": f["name"], "field_value": str(data.get(f["name"])) if data.get(f["name"]) is not None else None, "confidence": 0.94 if data.get(f["name"]) else 0.55} for f in fields]
+    return _fields_from_data(json.loads(response.output_text), fields)
+
+def gemini_extract(text: str, fields: list[dict], source_path: str):
+    try:
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        path = Path(source_path)
+        mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower(), "application/pdf")
+        properties = {f["name"]: types.Schema(type=types.Type.STRING, nullable=True, description=f.get("label", f["name"])) for f in fields}
+        schema = types.Schema(type=types.Type.OBJECT, properties=properties)
+        contents = ["Extract the requested fields from this document. Use null when a value is absent; do not guess.",
+                    types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)]
+        if text:
+            contents.append("Extracted text for reference:\n" + text[:50000])
+        response = client.models.generate_content(
+            model=GEMINI_MODEL, contents=contents,
+            config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema))
+        return _fields_from_data(json.loads(response.text), fields)
+    except Exception:
+        return fallback_extract(text, fields)
+
+def ai_extract(text: str, fields: list[dict], source_path: str):
+    if os.getenv("GEMINI_API_KEY"):
+        return gemini_extract(text, fields, source_path)
+    if os.getenv("OPENAI_API_KEY"):
+        return openai_extract(text, fields, source_path)
+    return fallback_extract(text, fields)
 
 def process_document(db: Session, document: Document):
     started = time.perf_counter(); document.status = "processing"; db.commit()
