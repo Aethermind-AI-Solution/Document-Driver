@@ -26,6 +26,8 @@ class ExtractedField(Base):
     confidence: Mapped[float] = mapped_column(Float)
     validated: Mapped[bool] = mapped_column(Boolean, default=False)
     edited_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grounded: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
