@@ -74,3 +74,41 @@ def test_ungrounded_when_tokens_absent():
     out = _ground_fields({"total": {"value": "Zebra Q9 Hyperdrive Unit", "quote": "Zebra Q9 Hyperdrive Unit"}},
                          [{"name": "total", "label": "Total"}], "Total: 100")
     assert out[0]["grounded"] == "ungrounded" and out[0]["confidence"] == 0.40
+
+
+from app.services import _clean_text
+
+
+def test_clean_text_strips_rupee_artifact():
+    assert _clean_text("I18,500") == "18,500"
+    assert _clean_text("Grand Total I78,880") == "Grand Total 78,880"
+    assert _clean_text("₹66,000") == "66,000"
+
+
+def test_clean_text_leaves_words_intact():
+    assert _clean_text("Installation Service") == "Installation Service"
+    assert _clean_text("Invoice No. INV-2026-00125") == "Invoice No. INV-2026-00125"
+
+
+def test_ground_fields_array_stores_json_and_grounds():
+    import json as _json
+    fields = [{"name": "line_items", "label": "Line Items", "type": "array",
+               "columns": ["description", "quantity", "amount"]}]
+    rows = [{"description": "Scanner", "quantity": "2", "amount": "37,000"},
+            {"description": "Printer", "quantity": "1", "amount": "24,000"}]
+    doc = "Scanner 2 37,000 Printer 1 24,000"
+    out = _ground_fields({"line_items": {"value": rows, "quote": None}}, fields, doc)
+    assert _json.loads(out[0]["field_value"]) == rows           # stored as JSON
+    assert out[0]["grounded"] == "grounded"                     # token-overlap over cells
+
+
+def test_ground_fields_empty_array_is_absent():
+    fields = [{"name": "line_items", "label": "Line Items", "type": "array", "columns": ["description"]}]
+    out = _ground_fields({"line_items": {"value": [], "quote": None}}, fields, "anything")
+    assert out[0]["field_value"] is None and out[0]["grounded"] == "absent"
+
+
+def test_ground_fields_array_without_columns_is_scalar():
+    fields = [{"name": "line_items", "label": "Line Items", "type": "array"}]  # no columns
+    out = _ground_fields({"line_items": {"value": "Item A; Item B", "quote": None}}, fields, "Item A; Item B")
+    assert out[0]["field_value"] == "Item A; Item B" and out[0]["grounded"] == "grounded"

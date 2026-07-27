@@ -35,10 +35,15 @@ def schema_for(db: Session, key: str):
     if not schema: raise ValueError(f"Unknown schema '{key}'")
     return {"name": schema.name, "fields": schema.fields}
 
+def _clean_text(s):
+    # PyMuPDF decodes the ₹ glyph as "I"; strip a ₹ or a word-boundary "I" that sits
+    # immediately before a digit (e.g. "I18,500"→"18,500") without touching words.
+    return re.sub(r"(?:₹|(?<![A-Za-z0-9])I)(?=\d)", "", s or "")
+
 def extract_text(path: str) -> str:
     p = Path(path)
     if p.suffix.lower() == ".pdf":
-        with fitz.open(p) as pdf: return "\n".join(page.get_text() for page in pdf)
+        with fitz.open(p) as pdf: return _clean_text("\n".join(page.get_text() for page in pdf))
     return ""
 
 def fallback_extract(text: str, fields: list[dict]):
@@ -88,21 +93,51 @@ def _ground_fields(data, fields, doc_text):
     out = []
     for f in fields:
         entry = d.get(f["name"])
-        value = entry.get("value") if isinstance(entry, dict) else entry
+        raw = entry.get("value") if isinstance(entry, dict) else entry
         quote = entry.get("quote") if isinstance(entry, dict) else None
-        value = str(value) if value is not None and str(value).strip() else None
         quote = quote if isinstance(quote, str) and quote.strip() else None
-        status, conf = _ground(value, quote, hay, verifiable)
-        out.append({"field_name": f["name"], "field_value": value,
+        if f.get("type") == "array" and f.get("columns"):
+            rows = [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
+            field_value = json.dumps(rows) if rows else None
+            blob = " ".join(str(v) for r in rows for v in r.values() if v is not None) or None
+            status, conf = _ground(blob, quote, hay, verifiable)
+        else:
+            field_value = str(raw) if raw is not None and str(raw).strip() else None
+            status, conf = _ground(field_value, quote, hay, verifiable)
+        out.append({"field_name": f["name"], "field_value": field_value,
                     "source_quote": quote, "grounded": status, "confidence": conf})
     return out
+
+def _openai_prop(f):
+    quote = {"type": ["string", "null"], "description": "verbatim quote from the document this value was taken from"}
+    if f.get("type") == "array" and f.get("columns"):
+        cols = f["columns"]
+        item = {"type": "object", "properties": {c: {"type": ["string", "null"]} for c in cols},
+                "required": cols, "additionalProperties": False}
+        value = {"type": ["array", "null"], "description": f.get("label", f["name"]), "items": item}
+    else:
+        value = {"type": ["string", "null"], "description": f.get("label", f["name"])}
+    return {"type": "object", "properties": {"value": value, "quote": quote},
+            "required": ["value", "quote"], "additionalProperties": False}
+
+
+def _gemini_prop(f):
+    from google.genai import types
+    quote = types.Schema(type=types.Type.STRING, nullable=True, description="verbatim quote from the document this value was taken from")
+    if f.get("type") == "array" and f.get("columns"):
+        item = types.Schema(type=types.Type.OBJECT, properties={c: types.Schema(type=types.Type.STRING, nullable=True) for c in f["columns"]})
+        value = types.Schema(type=types.Type.ARRAY, nullable=True, items=item, description=f.get("label", f["name"]))
+    else:
+        value = types.Schema(type=types.Type.STRING, nullable=True, description=f.get("label", f["name"]))
+    return types.Schema(type=types.Type.OBJECT, properties={"value": value, "quote": quote})
+
 
 def openai_extract(text: str, fields: list[dict], source_path: str):
     try:
         from openai import OpenAI
         client = OpenAI()
-        properties = {f["name"]: {"type":"object","properties":{"value":{"type":["string","null"],"description":f.get("label",f["name"])},"quote":{"type":["string","null"],"description":"verbatim quote from the document this value was taken from"}},"required":["value","quote"],"additionalProperties":False} for f in fields}
-        content = [{"type": "input_text", "text": "Extract all requested values. For each field also return a short verbatim quote from the document that the value was taken from. Use null for value and quote when a value is absent. Do not paraphrase the quote."}]
+        properties = {f["name"]: _openai_prop(f) for f in fields}
+        content = [{"type": "input_text", "text": "Extract all requested values with a short verbatim quote from the document for each. For list/table fields, return value as an array of row objects using the given columns. Use null when a value is absent; do not paraphrase the quote."}]
         path = Path(source_path)
         encoded = base64.b64encode(path.read_bytes()).decode()
         if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
@@ -124,9 +159,9 @@ def gemini_extract(text: str, fields: list[dict], source_path: str):
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         path = Path(source_path)
         mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(path.suffix.lower(), "application/pdf")
-        properties = {f["name"]: types.Schema(type=types.Type.OBJECT, properties={"value": types.Schema(type=types.Type.STRING, nullable=True, description=f.get("label", f["name"])), "quote": types.Schema(type=types.Type.STRING, nullable=True, description="verbatim quote from the document this value was taken from")}) for f in fields}
+        properties = {f["name"]: _gemini_prop(f) for f in fields}
         schema = types.Schema(type=types.Type.OBJECT, properties=properties)
-        contents = ["Extract the requested fields. For each field return its value and a short verbatim quote from the document the value was taken from; use null when a value is absent; do not paraphrase the quote.",
+        contents = ["Extract the requested fields, each with a short verbatim quote from the document. For list/table fields, return value as an array of row objects using the columns. Use null when a value is absent; do not paraphrase the quote.",
                     types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)]
         if text:
             contents.append("Extracted text for reference:\n" + text[:50000])
