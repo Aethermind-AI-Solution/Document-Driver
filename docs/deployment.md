@@ -97,7 +97,7 @@ reject, export CSV.
 | `CORS_ORIGINS` | Render (backend) | For production | comma-separated origins, e.g. `https://aethermind.vercel.app` |
 | `NEXT_PUBLIC_API_URL` | Vercel (frontend) | Yes | `https://aethermind-backend.onrender.com` |
 | `OPENAI_API_KEY` | Render (backend) | No | blank → deterministic fallback extraction |
-| `OPENAI_MODEL` | Render (backend) | No | `gpt-5` |
+| `OPENAI_MODEL` | Render (backend) | No | `gpt-4o` (set in `render.yaml`; use `gpt-4o-mini` to cut cost) |
 | `PYTHON_VERSION` | Render (backend) | No | `3.12.8` (set in `render.yaml`) |
 | `DATABASE_URL` / `UPLOAD_DIR` / `EXPORT_DIR` | Render (backend) | No | default local paths; override to point at a persistent disk later |
 
