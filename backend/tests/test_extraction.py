@@ -106,3 +106,9 @@ def test_ground_fields_empty_array_is_absent():
     fields = [{"name": "line_items", "label": "Line Items", "type": "array", "columns": ["description"]}]
     out = _ground_fields({"line_items": {"value": [], "quote": None}}, fields, "anything")
     assert out[0]["field_value"] is None and out[0]["grounded"] == "absent"
+
+
+def test_ground_fields_array_without_columns_is_scalar():
+    fields = [{"name": "line_items", "label": "Line Items", "type": "array"}]  # no columns
+    out = _ground_fields({"line_items": {"value": "Item A; Item B", "quote": None}}, fields, "Item A; Item B")
+    assert out[0]["field_value"] == "Item A; Item B" and out[0]["grounded"] == "grounded"

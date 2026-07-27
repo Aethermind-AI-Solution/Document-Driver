@@ -96,7 +96,7 @@ def _ground_fields(data, fields, doc_text):
         raw = entry.get("value") if isinstance(entry, dict) else entry
         quote = entry.get("quote") if isinstance(entry, dict) else None
         quote = quote if isinstance(quote, str) and quote.strip() else None
-        if f.get("type") == "array":
+        if f.get("type") == "array" and f.get("columns"):
             rows = [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
             field_value = json.dumps(rows) if rows else None
             blob = " ".join(str(v) for r in rows for v in r.values() if v is not None) or None
