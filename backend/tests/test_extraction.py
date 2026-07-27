@@ -59,3 +59,18 @@ def test_ai_extract_uses_fallback_without_keys(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     out = ai_extract("Total: 500", [{"name": "total", "label": "Total"}], "/x.pdf")
     assert out[0]["field_value"] == "500"
+
+
+def test_grounded_via_token_overlap_for_reformatted_table():
+    # a flattened line-items value whose rows are in the doc but spaced/ordered differently
+    doc = "Industrial Barcode Scanner 2  18,500  37,000  Warehouse Label Printer 1  24,000"
+    val = "Industrial Barcode Scanner 2 18,500 37,000Warehouse Label Printer 1 24,000"  # no space before 'Warehouse'
+    out = _ground_fields({"line_items": {"value": val, "quote": None}},
+                         [{"name": "line_items", "label": "Line Items"}], doc)
+    assert out[0]["grounded"] == "grounded" and out[0]["confidence"] == 0.90
+
+
+def test_ungrounded_when_tokens_absent():
+    out = _ground_fields({"total": {"value": "Zebra Q9 Hyperdrive Unit", "quote": "Zebra Q9 Hyperdrive Unit"}},
+                         [{"name": "total", "label": "Total"}], "Total: 100")
+    assert out[0]["grounded"] == "ungrounded" and out[0]["confidence"] == 0.40

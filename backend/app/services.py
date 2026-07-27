@@ -73,6 +73,12 @@ def _ground(value, quote, hay, verifiable):
         return ("unverified", 0.70)
     if (quote and _norm(quote) in hay) or (_norm(value) in hay):
         return ("grounded", 0.95)
+    # Fallback for reformatted / multi-value fields (e.g. flattened table rows like
+    # line_items) whose exact string isn't contiguous in the doc text: if (nearly)
+    # all of the value's tokens appear in the document, treat it as grounded.
+    tokens = [t for t in re.findall(r"[a-z0-9]+", _norm(value)) if len(t) >= 2]
+    if tokens and sum(1 for t in tokens if t in hay) / len(tokens) >= 0.85:
+        return ("grounded", 0.90)
     return ("ungrounded", 0.40)
 
 def _ground_fields(data, fields, doc_text):
