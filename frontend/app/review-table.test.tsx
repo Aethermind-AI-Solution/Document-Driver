@@ -34,4 +34,18 @@ describe("line-items table", () => {
     expect(screen.getByText("Printer")).toBeTruthy();
     expect(screen.getByText("description")).toBeTruthy();       // column header (raw key)
   });
+
+  it("does not crash when a line-items array has a null element", async () => {
+    const d2 = { id: 6, filename: "n.pdf", document_type: "invoice", status: "processed",
+      confidence: 0.9, upload_date: "2026-07-27T00:00:00", review_required: false,
+      fields: [{ id: 1, field_name: "line_items", confidence: 0.9, validated: true, grounded: "grounded", source_quote: null,
+        field_value: JSON.stringify([{ description: "Scanner", amount: "37,000" }, null, { description: "Printer", amount: "24,000" }]) }], audit: [] };
+    // re-point the mocked api at d2 for this render
+    const api = (await import("../lib/api")).api as any;
+    api.mockImplementation(async (p: string) => p === "/schemas" ? [{ key: "invoice", name: "Invoice", fields: [] }] : p === "/documents" ? [d2] : p.startsWith("/document/") ? d2 : {});
+    render(<Home />);
+    fireEvent.click(await screen.findByText("n.pdf"));
+    expect(await screen.findByText("Scanner")).toBeTruthy();
+    expect(screen.getByText("Printer")).toBeTruthy();
+  });
 });
