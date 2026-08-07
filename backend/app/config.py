@@ -34,3 +34,7 @@ for directory in (UPLOAD_DIR, EXPORT_DIR):
 # directory exists before SQLAlchemy tries to open the file.
 if DATABASE_URL.startswith("sqlite:///"):
     Path(DATABASE_URL.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-insecure-secret-change-me")
+JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
