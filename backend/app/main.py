@@ -6,11 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
-from . import config
+from . import auth, config
 from .security import rate_limit, require_access
 from .database import Base, engine, get_db
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition
-from .schemas import DocumentUpdate, SchemaPayload
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
+from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
 from .storage import get_storage
 
@@ -63,6 +63,26 @@ def serialize(d: Document):
 
 @app.get("/health")
 def health(): return {"status":"ok"}
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter_by(email=payload.email).first()
+    if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
+        raise HTTPException(401, "Invalid email or password")
+    return {"access_token": auth.create_access_token(user), "token_type": "bearer",
+            "user": {"id": user.id, "email": user.email, "role": user.role, "is_active": user.is_active}}
+
+@app.get("/auth/me", response_model=UserOut)
+def me(user: User = Depends(auth.get_current_user)):
+    return {"id": user.id, "email": user.email, "role": user.role, "is_active": user.is_active}
+
+@app.post("/auth/change-password")
+def change_password(payload: PasswordChange, db: Session = Depends(get_db),
+                    user: User = Depends(auth.get_current_user)):
+    if not auth.verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, "Current password is incorrect")
+    user.password_hash = auth.hash_password(payload.new_password); db.commit()
+    return {"status": "ok"}
 
 @app.get("/schemas")
 def list_schemas(db: Session = Depends(get_db)): return available_schemas(db)
