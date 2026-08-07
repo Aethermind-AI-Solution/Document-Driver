@@ -2,8 +2,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from app import auth
 from app.database import Base, get_db
 from app.main import app
+from app.models import User
 
 
 @pytest.fixture
@@ -29,4 +31,13 @@ def db_session(tmp_path):
 
 @pytest.fixture
 def client(db_session):
-    return TestClient(app)
+    """Existing endpoint tests run authenticated as an admin unless a test
+    overrides get_current_user itself."""
+    admin = User(email="admin@test.local", password_hash="x", role="admin", is_active=True)
+    db_session.add(admin)
+    db_session.commit()
+    app.dependency_overrides[auth.get_current_user] = lambda: admin
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(auth.get_current_user, None)

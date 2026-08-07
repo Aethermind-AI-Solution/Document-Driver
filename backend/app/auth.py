@@ -2,7 +2,10 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
+from fastapi import Depends, Header, HTTPException
+from sqlalchemy.orm import Session
 from . import config
+from .database import get_db
 from .models import User
 
 _ph = PasswordHasher()
@@ -35,3 +38,25 @@ def decode_token(token: str) -> dict:
         return jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
     except jwt.PyJWTError as exc:
         raise AuthError(str(exc))
+
+
+def get_current_user(authorization: str | None = Header(default=None),
+                     db: Session = Depends(get_db)) -> User:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing bearer token")
+    try:
+        claims = decode_token(authorization.removeprefix("Bearer ").strip())
+    except AuthError:
+        raise HTTPException(401, "Invalid or expired token")
+    user = db.get(User, int(claims["sub"]))
+    if not user or not user.is_active:
+        raise HTTPException(401, "User not found or inactive")
+    return user
+
+
+def require_role(*roles: str):
+    def _dep(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
+            raise HTTPException(403, "Insufficient permissions")
+        return user
+    return _dep
