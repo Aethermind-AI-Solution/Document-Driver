@@ -23,6 +23,11 @@ DEMO_ACCESS_TOKEN = os.getenv("DEMO_ACCESS_TOKEN", "")   # empty ⇒ gate disabl
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")  # "local" | "s3"
+R2_ENDPOINT = os.getenv("R2_ENDPOINT", "")
+R2_BUCKET = os.getenv("R2_BUCKET", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
 for directory in (UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 # Fresh deployments start with an empty tree, so make sure the SQLite database
