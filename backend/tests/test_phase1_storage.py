@@ -1,4 +1,3 @@
-from pathlib import Path
 import pytest
 from app.storage import LocalStorage
 
@@ -24,3 +23,14 @@ def test_get_storage_returns_local_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path)
     s = storage.get_storage()
     assert isinstance(s, LocalStorage)
+
+
+def test_get_storage_s3_fast_fail_missing_config(monkeypatch):
+    from app import config, storage
+    monkeypatch.setattr(config, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(config, "R2_ENDPOINT", "")
+    monkeypatch.setattr(config, "R2_BUCKET", "")
+    monkeypatch.setattr(config, "R2_ACCESS_KEY_ID", "")
+    monkeypatch.setattr(config, "R2_SECRET_ACCESS_KEY", "")
+    with pytest.raises(RuntimeError):
+        storage.get_storage()
