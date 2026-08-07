@@ -4,7 +4,8 @@ import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition
+from .auth import hash_password
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 from . import storage
 
 def log(db: Session, document_id: int, action: str, details: str = ""):
@@ -217,3 +218,16 @@ def process_document(db: Session, document: Document):
         db.commit(); db.refresh(document); return document
     except Exception as exc:
         document.status = "error"; log(db, document.id, "Processing failed", str(exc)); db.commit(); raise
+
+def create_user(db: Session, email: str, password: str, role: str) -> User:
+    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)
+    db.add(user); db.commit(); db.refresh(user)
+    return user
+
+def bootstrap_admin(db: Session) -> None:
+    from .config import ADMIN_EMAIL, ADMIN_PASSWORD
+    if not (ADMIN_EMAIL and ADMIN_PASSWORD):
+        return
+    if db.query(User).count() > 0:
+        return
+    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")

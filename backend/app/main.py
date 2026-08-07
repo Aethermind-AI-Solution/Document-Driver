@@ -25,6 +25,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def _bootstrap():
+    from .services import bootstrap_admin
+    db = next(get_db())
+    try:
+        bootstrap_admin(db)
+    finally:
+        db.close()
+
 def _parse_rows(value):
     """Return a list-of-row-dicts if the field value is a JSON table (line_items),
     else None."""
@@ -83,6 +92,32 @@ def change_password(payload: PasswordChange, db: Session = Depends(get_db),
         raise HTTPException(400, "Current password is incorrect")
     user.password_hash = auth.hash_password(payload.new_password); db.commit()
     return {"status": "ok"}
+
+@app.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    return [{"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
+            for u in db.query(User).order_by(User.created_at.desc()).all()]
+
+@app.post("/users", status_code=201, response_model=UserOut)
+def create_user_endpoint(payload: UserCreate, db: Session = Depends(get_db),
+                         _: User = Depends(auth.require_role("admin"))):
+    if db.query(User).filter_by(email=payload.email).first():
+        raise HTTPException(409, "Email already exists")
+    from .services import create_user
+    u = create_user(db, payload.email, payload.password, payload.role)
+    return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
+
+@app.patch("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: int, role: str | None = None, is_active: bool | None = None,
+                db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    if role is not None and role not in {"admin", "reviewer", "viewer"}:
+        raise HTTPException(400, "Invalid role")
+    u = db.get(User, user_id)
+    if not u: raise HTTPException(404, "User not found")
+    if role is not None: u.role = role
+    if is_active is not None: u.is_active = is_active
+    db.commit()
+    return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
 
 @app.get("/schemas")
 def list_schemas(db: Session = Depends(get_db)): return available_schemas(db)
