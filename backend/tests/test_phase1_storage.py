@@ -34,3 +34,23 @@ def test_get_storage_s3_fast_fail_missing_config(monkeypatch):
     monkeypatch.setattr(config, "R2_SECRET_ACCESS_KEY", "")
     with pytest.raises(RuntimeError):
         storage.get_storage()
+
+
+def test_process_reads_bytes_through_storage(db_session, monkeypatch, tmp_path):
+    from app import config, services
+    from app.models import Document
+    monkeypatch.setattr(config, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path)
+    # a doc whose bytes live only in storage under its key
+    from app.storage import LocalStorage
+    LocalStorage(tmp_path).save("k.pdf", b"dummy-pdf-bytes")
+    captured = {}
+    monkeypatch.setattr(services, "extract_text", lambda path: (captured.__setitem__("path", path), "Total 500")[1])
+    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
+        {"field_name": "total", "field_value": "500", "source_quote": None,
+         "grounded": "grounded", "confidence": 0.95}])
+    doc = Document(filename="k.pdf", document_type="invoice", stored_path="k.pdf")
+    db_session.add(doc); db_session.commit(); db_session.refresh(doc)
+    services.process_document(db_session, doc)
+    # extract_text received a real temp file path (not the storage key)
+    assert captured["path"].endswith(".pdf") and captured["path"] != "k.pdf"

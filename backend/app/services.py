@@ -1,10 +1,11 @@
-import base64, json, os, re, time
+import base64, json, os, re, time, tempfile
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
+from . import storage
 
 def log(db: Session, document_id: int, action: str, details: str = ""):
     db.add(AuditLog(document_id=document_id, action=action, details=details))
@@ -195,7 +196,14 @@ def process_document(db: Session, document: Document):
     started = time.perf_counter(); document.status = "processing"; db.commit()
     try:
         schema = schema_for(db, document.document_type)
-        values = ai_extract(extract_text(document.stored_path), schema["fields"], document.stored_path)
+        data = storage.get_storage().open(document.stored_path)
+        suffix = Path(document.stored_path).suffix
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        try:
+            tmp.write(data); tmp.close()
+            values = ai_extract(extract_text(tmp.name), schema["fields"], tmp.name)
+        finally:
+            os.unlink(tmp.name)
         db.query(ExtractedField).filter_by(document_id=document.id).delete()
         definitions = {field["name"]: field for field in schema["fields"]}
         for field in values:

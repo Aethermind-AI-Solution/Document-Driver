@@ -12,6 +12,7 @@ from .database import Base, engine, get_db
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition
 from .schemas import DocumentUpdate, SchemaPayload
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
+from .storage import get_storage
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0", dependencies=[Depends(require_access)])
@@ -77,9 +78,8 @@ async def upload(file: UploadFile = File(...), document_type: str = "invoice", d
     data = await file.read()
     if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, f"File exceeds the {config.MAX_UPLOAD_MB} MB limit")
     safe_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
-    destination = config.UPLOAD_DIR / safe_name
-    destination.write_bytes(data)
-    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=str(destination))
+    key = get_storage().save(safe_name, data)
+    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=key)
     db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}"); db.commit(); db.refresh(doc)
     return serialize(doc)
 
