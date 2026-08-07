@@ -48,7 +48,10 @@ def get_current_user(authorization: str | None = Header(default=None),
         claims = decode_token(authorization.removeprefix("Bearer ").strip())
     except AuthError:
         raise HTTPException(401, "Invalid or expired token")
-    user = db.get(User, int(claims["sub"]))
+    try:
+        user = db.get(User, int(claims["sub"]))
+    except (KeyError, ValueError):
+        raise HTTPException(401, "Invalid token claims")
     if not user or not user.is_active:
         raise HTTPException(401, "User not found or inactive")
     return user

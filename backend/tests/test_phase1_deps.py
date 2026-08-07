@@ -1,7 +1,8 @@
 import pytest
+from datetime import timezone
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from app import auth
+from app import auth, config
 from app.database import get_db
 from app.models import User
 
@@ -37,3 +38,56 @@ def test_require_role_allows_and_denies(db_session):
     app2.dependency_overrides[get_db] = lambda: (yield db_session)
     denied = TestClient(app2).get("/probe", headers={"Authorization": f"Bearer {token}"})
     assert denied.status_code == 403
+
+
+def test_get_current_user_rejects_non_bearer_auth(db_session):
+    """Test that non-Bearer Authorization header returns 401."""
+    app = _app_with_route(auth.get_current_user)
+    app.dependency_overrides[get_db] = lambda: (yield db_session)
+    client = TestClient(app)
+    response = client.get("/probe", headers={"Authorization": "Basic xyz"})
+    assert response.status_code == 401
+
+
+def test_get_current_user_rejects_malformed_token(db_session):
+    """Test that malformed/garbage bearer token returns 401."""
+    app = _app_with_route(auth.get_current_user)
+    app.dependency_overrides[get_db] = lambda: (yield db_session)
+    client = TestClient(app)
+    response = client.get("/probe", headers={"Authorization": "Bearer not-a-jwt"})
+    assert response.status_code == 401
+
+
+def test_get_current_user_rejects_expired_token(db_session, monkeypatch):
+    """Test that expired token returns 401."""
+    # Create a user
+    db_session.add(User(email="exp@x.co", password_hash=auth.hash_password("p"),
+                        role="reviewer", is_active=True))
+    db_session.commit()
+    user = db_session.query(User).filter_by(email="exp@x.co").first()
+
+    # Temporarily set JWT_EXPIRE_HOURS to negative to create an expired token
+    monkeypatch.setattr(config, "JWT_EXPIRE_HOURS", -1)
+    token = auth.create_access_token(user)
+
+    app = _app_with_route(auth.get_current_user)
+    app.dependency_overrides[get_db] = lambda: (yield db_session)
+    client = TestClient(app)
+    response = client.get("/probe", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
+
+
+def test_get_current_user_rejects_inactive_user(db_session):
+    """Test that inactive user returns 401."""
+    # Create an inactive user
+    db_session.add(User(email="inactive@x.co", password_hash=auth.hash_password("p"),
+                        role="reviewer", is_active=False))
+    db_session.commit()
+    user = db_session.query(User).filter_by(email="inactive@x.co").first()
+    token = auth.create_access_token(user)
+
+    app = _app_with_route(auth.get_current_user)
+    app.dependency_overrides[get_db] = lambda: (yield db_session)
+    client = TestClient(app)
+    response = client.get("/probe", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 401
