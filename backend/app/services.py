@@ -8,8 +8,10 @@ from .auth import hash_password
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 from . import storage
 
-def log(db: Session, document_id: int, action: str, details: str = ""):
-    db.add(AuditLog(document_id=document_id, action=action, details=details))
+def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
+    db.add(AuditLog(document_id=document_id, action=action, details=details,
+                    actor_id=getattr(actor, "id", None),
+                    actor_email=getattr(actor, "email", None)))
 
 def resolve_review_action(action: str, reason: str | None) -> dict:
     """Map a review action to status/flag overrides and an audit entry.
@@ -193,7 +195,7 @@ def ai_extract(text: str, fields: list[dict], source_path: str):
         return openai_extract(text, fields, source_path)
     return fallback_extract(text, fields)
 
-def process_document(db: Session, document: Document):
+def process_document(db: Session, document: Document, actor=None):
     started = time.perf_counter(); document.status = "processing"; db.commit()
     try:
         schema = schema_for(db, document.document_type)
@@ -214,10 +216,10 @@ def process_document(db: Session, document: Document):
         document.review_required = any(v["confidence"] < .9 or not v["validated"] for v in values)
         document.status = "review_required" if document.review_required else "processed"
         document.processing_time = round(time.perf_counter() - started, 2)
-        log(db, document.id, "Processed", f"Applied {document.document_type} schema")
+        log(db, document.id, "Processed", f"Applied {document.document_type} schema", actor=actor)
         db.commit(); db.refresh(document); return document
     except Exception as exc:
-        document.status = "error"; log(db, document.id, "Processing failed", str(exc)); db.commit(); raise
+        document.status = "error"; log(db, document.id, "Processing failed", str(exc), actor=actor); db.commit(); raise
 
 def create_user(db: Session, email: str, password: str, role: str) -> User:
     user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)

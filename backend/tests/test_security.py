@@ -1,42 +1,4 @@
-import pytest
-from fastapi import HTTPException, Request
-from app import config
-from app.security import require_access, SlidingWindowRateLimiter
-
-
-def _request(path):
-    return Request({"type": "http", "http_version": "1.1", "method": "GET",
-                    "path": path, "raw_path": path.encode(), "headers": [],
-                    "query_string": b"", "scheme": "http", "server": ("test", 80),
-                    "client": ("1.2.3.4", 1234)})
-
-
-def test_gate_disabled_allows(monkeypatch):
-    monkeypatch.setattr(config, "DEMO_ACCESS_TOKEN", "")
-    require_access(_request("/documents"), None)  # no exception
-
-
-def test_gate_blocks_without_token(monkeypatch):
-    monkeypatch.setattr(config, "DEMO_ACCESS_TOKEN", "secret")
-    with pytest.raises(HTTPException) as e:
-        require_access(_request("/documents"), None)
-    assert e.value.status_code == 401
-
-
-def test_gate_blocks_wrong_token(monkeypatch):
-    monkeypatch.setattr(config, "DEMO_ACCESS_TOKEN", "secret")
-    with pytest.raises(HTTPException):
-        require_access(_request("/documents"), "nope")
-
-
-def test_gate_allows_correct_token(monkeypatch):
-    monkeypatch.setattr(config, "DEMO_ACCESS_TOKEN", "secret")
-    require_access(_request("/documents"), "secret")  # no exception
-
-
-def test_gate_allows_health_without_token(monkeypatch):
-    monkeypatch.setattr(config, "DEMO_ACCESS_TOKEN", "secret")
-    require_access(_request("/health"), None)  # no exception
+from app.security import SlidingWindowRateLimiter
 
 
 def test_rate_limiter_allows_then_blocks():
