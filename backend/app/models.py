@@ -1,14 +1,17 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 class Document(Base):
     __tablename__ = "documents"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     filename: Mapped[str] = mapped_column(String(255))
     document_type: Mapped[str] = mapped_column(String(80), default="invoice")
-    upload_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    upload_date: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     status: Mapped[str] = mapped_column(String(40), default="uploaded")
     processing_time: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -23,6 +26,7 @@ class ExtractedField(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
     field_name: Mapped[str] = mapped_column(String(120))
     field_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_value: Mapped[str | None] = mapped_column(Text, nullable=True)  # AI value before any human edit
     confidence: Mapped[float] = mapped_column(Float)
     validated: Mapped[bool] = mapped_column(Boolean, default=False)
     edited_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -34,7 +38,7 @@ class AuditLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"))
     action: Mapped[str] = mapped_column(String(120))
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 class SchemaDefinition(Base):

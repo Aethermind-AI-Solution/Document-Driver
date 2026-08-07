@@ -19,6 +19,8 @@ describe("titleize", () => {
   it("uppercases known acronym tokens", () => {
     expect(titleize("gst_number")).toBe("GST Number");
     expect(titleize("po_number")).toBe("PO Number");
+    expect(titleize("seller_gstin")).toBe("Seller GSTIN");
+    expect(titleize("buyer_gstin")).toBe("Buyer GSTIN");
   });
 });
 

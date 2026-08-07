@@ -112,3 +112,24 @@ def test_ground_fields_array_without_columns_is_scalar():
     fields = [{"name": "line_items", "label": "Line Items", "type": "array"}]  # no columns
     out = _ground_fields({"line_items": {"value": "Item A; Item B", "quote": None}}, fields, "Item A; Item B")
     assert out[0]["field_value"] == "Item A; Item B" and out[0]["grounded"] == "grounded"
+
+
+# Q3 — word-boundary grounding: a short value must not match inside a larger number
+def test_short_value_not_grounded_inside_larger_number():
+    out = _by({"total": {"value": "1", "quote": None}}, "Invoice 100 Total")
+    assert out["total"]["grounded"] == "ungrounded"
+
+
+def test_token_not_grounded_as_substring_of_longer_token():
+    # "18" must not ground against "1800" — it is not a standalone token in the doc
+    out = _by({"total": {"value": "18", "quote": None}}, "Amount 1800 due")
+    assert out["total"]["grounded"] == "ungrounded"
+
+
+# Q6 — a row whose cells are all empty must not ground as true
+def test_array_all_empty_cells_is_absent():
+    fields = [{"name": "line_items", "label": "Line Items", "type": "array",
+               "columns": ["description", "amount"]}]
+    rows = [{"description": "", "amount": ""}]
+    out = _ground_fields({"line_items": {"value": rows, "quote": None}}, fields, "Scanner 2 37,000")
+    assert out[0]["grounded"] == "absent"

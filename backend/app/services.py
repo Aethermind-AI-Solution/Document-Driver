@@ -71,23 +71,33 @@ def passes_validation(field: dict, value: str | None) -> bool:
 def _norm(s):
     return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
-def _ground(value, quote, hay, verifiable):
+def _contains(hay, needle):
+    """Word-boundary phrase match so a short value ("1") doesn't match inside a
+    larger token ("100"). Boundaries are on alphanumerics only."""
+    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", hay) is not None
+
+def _ground(value, quote, hay, hay_tokens, verifiable):
     if value is None:
+        return ("absent", 0.55)
+    nvalue = _norm(value)
+    if not nvalue:  # whitespace-only / a row of blank cells is not evidence of anything
         return ("absent", 0.55)
     if not verifiable:
         return ("unverified", 0.70)
-    if (quote and _norm(quote) in hay) or (_norm(value) in hay):
+    nquote = _norm(quote) if quote else ""
+    if (nquote and _contains(hay, nquote)) or _contains(hay, nvalue):
         return ("grounded", 0.95)
     # Fallback for reformatted / multi-value fields (e.g. flattened table rows like
     # line_items) whose exact string isn't contiguous in the doc text: if (nearly)
-    # all of the value's tokens appear in the document, treat it as grounded.
-    tokens = [t for t in re.findall(r"[a-z0-9]+", _norm(value)) if len(t) >= 2]
-    if tokens and sum(1 for t in tokens if t in hay) / len(tokens) >= 0.85:
+    # all of the value's tokens appear as standalone tokens in the document, ground it.
+    tokens = [t for t in re.findall(r"[a-z0-9]+", nvalue) if len(t) >= 2]
+    if tokens and sum(1 for t in tokens if t in hay_tokens) / len(tokens) >= 0.85:
         return ("grounded", 0.90)
     return ("ungrounded", 0.40)
 
 def _ground_fields(data, fields, doc_text):
     hay = _norm(doc_text)
+    hay_tokens = set(re.findall(r"[a-z0-9]+", hay))
     verifiable = bool(hay)
     d = data if isinstance(data, dict) else {}
     out = []
@@ -99,11 +109,11 @@ def _ground_fields(data, fields, doc_text):
         if f.get("type") == "array" and f.get("columns"):
             rows = [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
             field_value = json.dumps(rows) if rows else None
-            blob = " ".join(str(v) for r in rows for v in r.values() if v is not None) or None
-            status, conf = _ground(blob, quote, hay, verifiable)
+            blob = " ".join(str(v) for r in rows for v in r.values() if v is not None and str(v).strip()) or None
+            status, conf = _ground(blob, quote, hay, hay_tokens, verifiable)
         else:
             field_value = str(raw) if raw is not None and str(raw).strip() else None
-            status, conf = _ground(field_value, quote, hay, verifiable)
+            status, conf = _ground(field_value, quote, hay, hay_tokens, verifiable)
         out.append({"field_name": f["name"], "field_value": field_value,
                     "source_quote": quote, "grounded": status, "confidence": conf})
     return out
@@ -190,7 +200,7 @@ def process_document(db: Session, document: Document):
         definitions = {field["name"]: field for field in schema["fields"]}
         for field in values:
             field["validated"] = passes_validation(definitions[field["field_name"]], field["field_value"])
-            db.add(ExtractedField(document_id=document.id, **field))
+            db.add(ExtractedField(document_id=document.id, original_value=field["field_value"], **field))
         document.confidence = sum(v["confidence"] for v in values) / max(len(values), 1)
         document.review_required = any(v["confidence"] < .9 or not v["validated"] for v in values)
         document.status = "review_required" if document.review_required else "processed"
