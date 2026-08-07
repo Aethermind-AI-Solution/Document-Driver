@@ -7,14 +7,15 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 
 ---
 
-## Phase 0 — Harden the foundation (debt & quick wins)
+## Phase 0 — Harden the foundation (debt & quick wins) ✅ DONE (2026-08-07, `feat/phase-0-quick-wins`)
 *Goal: fix correctness bugs and unblock later phases. Do first — cheap, high-leverage.*
-- **Q1** SQLite `WAL` + `busy_timeout` `XS` — removes "database is locked" risk
-- **Q2** Store **original AI value** separately from human-corrected `S` — **unblocks the learning loop (Phase 4)**
-- **Q5** `datetime.utcnow()` → tz-aware + validate `POST /schemas` payload `S`
-- **Q3** Grounding: substring → word-boundary match `S`
-- **Q4** CSV export: flatten `line_items` rows `S`
-- **Q6** Titleize `gstin`; guard all-empty-cell grounding `XS`
+- ✅ **Q1** SQLite `WAL` + `busy_timeout` — removes "database is locked" risk
+- ✅ **Q2** Store **original AI value** separately from human-corrected — **unblocks the learning loop (Phase 4)**
+- ✅ **Q5** `datetime.utcnow()` → tz-aware + validate `POST /schemas` payload
+- ✅ **Q3** Grounding: substring → word-boundary match
+- ✅ **Q4** CSV export: flatten `line_items` rows into a columnar section
+- ✅ **Q6** Titleize `gstin`; guard all-empty-cell grounding
+*(Backend 54 tests, frontend 13 tests passing.)*
 
 ## Phase 1 — Persistence & identity (make it real)
 *Goal: data survives; every action has an owner. Prerequisite for connectors, audit, learning.*
