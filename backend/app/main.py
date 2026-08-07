@@ -14,7 +14,9 @@ from .schemas import DocumentUpdate, SchemaPayload
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
 from .storage import get_storage
 
-Base.metadata.create_all(bind=engine)
+# Tests/dev create the schema directly; prod runs Alembic migrations on deploy.
+if config.DATABASE_URL.startswith("sqlite"):
+    Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0", dependencies=[Depends(require_access)])
 app.add_middleware(
     CORSMiddleware,
