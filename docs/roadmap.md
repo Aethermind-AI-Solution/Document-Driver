@@ -24,13 +24,18 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 
 ## Phase 2 — Real multi-agent parallel pipeline (make the agents real)
 *Goal: replace the single sync OpenAI call + cosmetic "6 agents" with a real, parallel pipeline. This is the MCP multi-agent + parallel-processing core. Supersedes Q7.*
-- **B8** Classifier agent (AI picks doc type) `M`
+
+### Phase 2a ✅ Shipped (2026-08-08)
+- ✅ **B8** Classifier agent (AI picks doc type) `M`
+- ✅ **Parallel fan-out extractors** (per field-group / per page) + reconciliation/merge agent `L`
+- ✅ Validator / anomaly agent `M`
+- ✅ Real agent panel (live extraction steps + anomaly chips in UI) `M`
+- *Grounding + HITL review already exist — wired into this pipeline.*
+
+### Phase 2b (future)
 - Splitter (multi-doc / multi-page) `M`
-- **Parallel fan-out extractors** (per field-group / per page) + reconciliation/merge agent `L`
-- Validator / anomaly agent `M`
 - Async processing (queue + workers, or Tasks primitive) `L` — kills the ~10s wait
 - Structured logging (foundation for B15) `S`
-- *Grounding + HITL review already exist — wired into this pipeline.*
 
 ## Phase 3 — MCP connectors & integration (connect to the world)
 *Goal: stop hand-building integrations; ingest and push via the MCP ecosystem. Needs Phase 1 persistence.*

@@ -170,6 +170,24 @@ Render's `render.yaml` is configured to run `alembic upgrade head` on every depl
 
 The old `DEMO_ACCESS_TOKEN` gate has been removed. All endpoints now require JWT auth (except `/health` and `/docs`). Use the admin bootstrap credentials to log in and manage users and roles.
 
+## Phase 2a — Parallel pipeline
+
+No new infrastructure required. The real multi-agent extraction pipeline is live:
+
+- **Classifier agent** auto-detects document type; falls back to a hint if provided.
+- **Per-page parallel extractors** fan out via the existing `ai_extract` call, with reconciliation/merge to unify results.
+- **Validator + anomaly agent** checks schema validity and flags suspicious values for review.
+- **Real agent panel** in the UI shows live extraction steps and anomalies.
+
+**Database migration:** Migration `0003` runs automatically via the existing `alembic upgrade head` on every deploy (set in `render.yaml`). No manual action needed.
+
+**Optional env vars** (in `.env.example`):
+- `CLASSIFIER_MODEL` — LLM for doc-type classification (default: `gpt-4o-mini`).
+- `PIPELINE_CONCURRENCY` — max parallel extractor calls (default: `5`).
+- `PIPELINE_STAGE_TIMEOUT` — timeout per pipeline stage in seconds (default: `60`).
+
+**Cost note:** Per-document processing now makes one classifier call + one extractor call per page, compared to the old single call. OpenAI usage increases slightly but remains within the fallback-mode estimate. Async queue + workers (Phase 2b) and the multi-document splitter remain future work.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:
