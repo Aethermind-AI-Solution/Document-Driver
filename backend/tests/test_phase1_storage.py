@@ -54,3 +54,23 @@ def test_process_reads_bytes_through_storage(db_session, monkeypatch, tmp_path):
     services.process_document(db_session, doc)
     # extract_text received a real temp file path (not the storage key)
     assert captured["path"].endswith(".pdf") and captured["path"] != "k.pdf"
+
+
+def test_s3_storage_uses_region_and_path_style(monkeypatch):
+    import boto3
+    from app.storage import S3Storage
+    captured = {}
+
+    def fake_client(service, **kwargs):
+        captured["service"] = service
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    S3Storage("https://ref.supabase.co/storage/v1/s3", "aethermind", "ak", "sk", region="us-east-1")
+    assert captured["service"] == "s3"
+    assert captured["region_name"] == "us-east-1"
+    assert captured["endpoint_url"] == "https://ref.supabase.co/storage/v1/s3"
+    cfg = captured["config"]
+    assert cfg.signature_version == "s3v4"
+    assert cfg.s3["addressing_style"] == "path"
