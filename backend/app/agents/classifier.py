@@ -44,6 +44,6 @@ class ClassifierAgent:
             c.schema = services.schema_for(c.db, chosen)
             c._detail = f"{chosen} ({conf:.2f})"
         result = await timed_stage(self.name, body, ctx)
-        if getattr(ctx, "_detail", None):
+        if result.status != "error" and getattr(ctx, "_detail", None):
             result.detail = ctx._detail
         return result

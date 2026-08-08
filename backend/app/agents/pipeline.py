@@ -25,6 +25,10 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         for AgentCls in STAGES:
             await AgentCls().run(ctx)
 
+        errored = [s.name for s in ctx.trace if s.status == "error"]
+        if errored:
+            raise RuntimeError(f"Pipeline stage(s) failed: {', '.join(errored)}")
+
         db.query(ExtractedField).filter_by(document_id=document.id).delete()
         for f in ctx.fields:
             db.add(ExtractedField(document_id=document.id, original_value=f["field_value"], **f))

@@ -69,6 +69,7 @@ class ValidatorAgent:
         async def body(c: PipelineContext):
             c.fields, c.anomalies = validate(c.db, c.document, c.fields, c.schema["fields"])
         result = await timed_stage(self.name, body, ctx)
-        result.status = "attention" if ctx.anomalies else "ok"
-        result.detail = f"{len(ctx.anomalies)} anomaly(ies)" if ctx.anomalies else "ok"
+        if result.status != "error":
+            result.status = "attention" if ctx.anomalies else "ok"
+            result.detail = f"{len(ctx.anomalies)} anomaly(ies)" if ctx.anomalies else "ok"
         return result

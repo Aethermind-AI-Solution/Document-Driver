@@ -31,5 +31,6 @@ class ExtractorAgent:
             c.page_results = list(await asyncio.gather(*[one(p) for p in c.pages]))
 
         result = await timed_stage(self.name, body, ctx)
-        result.detail = f"{len(ctx.pages)} page(s)"
+        if result.status != "error":
+            result.detail = f"{len(ctx.pages)} page(s)"
         return result

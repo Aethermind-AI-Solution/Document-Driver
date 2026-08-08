@@ -40,5 +40,6 @@ class ReconcilerAgent:
         async def body(c: PipelineContext):
             c.fields = reconcile(c.page_results, c.schema["fields"])
         result = await timed_stage(self.name, body, ctx)
-        result.detail = f"{len(ctx.fields)} field(s) from {len(ctx.page_results)} page(s)"
+        if result.status != "error":
+            result.detail = f"{len(ctx.fields)} field(s) from {len(ctx.page_results)} page(s)"
         return result
