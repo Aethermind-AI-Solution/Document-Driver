@@ -1,9 +1,9 @@
-import csv, io, json, shutil
+import csv, io, json, logging, shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
 from . import auth, config
@@ -21,6 +21,20 @@ config.check_production_config()
 if config.DATABASE_URL.startswith("sqlite"):
     Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
+_log = logging.getLogger("aethermind")
+
+# Catch-all so an unexpected error becomes a real JSON 500 that flows back OUT
+# through the CORS middleware below. Registered BEFORE CORSMiddleware so CORS is
+# the outer layer — otherwise Starlette's default 500 skips CORS and the browser
+# only sees "Failed to fetch" instead of the actual error/status.
+@app.middleware("http")
+async def _surface_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        _log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -140,7 +154,11 @@ async def upload(file: UploadFile = File(...), document_type: str = "invoice", d
     data = await file.read()
     if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, f"File exceeds the {config.MAX_UPLOAD_MB} MB limit")
     safe_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
-    key = get_storage().save(safe_name, data)
+    try:
+        key = get_storage().save(safe_name, data)
+    except Exception as exc:
+        _log.exception("Storage upload failed")
+        raise HTTPException(502, f"Storage upload failed: {exc}")
     doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=key)
     db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}", actor=user); db.commit(); db.refresh(doc)
     return serialize(doc)
