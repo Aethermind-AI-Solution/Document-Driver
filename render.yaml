@@ -32,3 +32,27 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4o
+      # Phase 1 — production persistence & identity (see docs/deployment.md).
+      # Postgres connection string, psycopg v3 scheme, e.g.
+      # postgresql+psycopg://user:password@host/db
+      - key: DATABASE_URL
+        sync: false
+      # "local" (ephemeral, default) or "s3" (Cloudflare R2 — durable storage)
+      - key: STORAGE_BACKEND
+        sync: false
+      - key: R2_ENDPOINT
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      # Strong random secret used to sign JWTs. Required in production — boot
+      # fails fast if unset/default when DATABASE_URL is not sqlite.
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

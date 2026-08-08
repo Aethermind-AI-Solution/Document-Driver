@@ -17,7 +17,7 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 - ✅ **Q6** Titleize `gstin`; guard all-empty-cell grounding
 *(Backend 54 tests, frontend 13 tests passing.)*
 
-## Phase 1 — Persistence & identity (make it real) ✅ DONE (2026-08-08, `feat/phase-1-persistence`)
+## Phase 1 — Persistence & identity (make it real) ✅ DONE (2026-08-08, `feat/phase-1-persistence-identity`)
 *Goal: data survives; every action has an owner. Prerequisite for connectors, audit, learning.*
 - ✅ **B6** Postgres + object storage (R2/S3) — replace ephemeral SQLite/local files
 - ✅ **B5** Auth + roles (RBAC) + **actor-stamped audit log**

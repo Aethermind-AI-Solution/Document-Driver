@@ -37,3 +37,9 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dev-insecure-secret-change-me")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
+
+def check_production_config():
+    """Refuse to boot in prod (non-sqlite DB) with an insecure/blank JWT secret."""
+    if not DATABASE_URL.startswith("sqlite") and JWT_SECRET in ("", "dev-insecure-secret-change-me"):
+        raise RuntimeError("JWT_SECRET must be set to a strong value in production (non-sqlite DATABASE_URL).")

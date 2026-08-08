@@ -14,6 +14,9 @@ from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
 from .storage import get_storage
 
+# Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
+config.check_production_config()
+
 # Tests/dev create the schema directly; prod runs Alembic migrations on deploy.
 if config.DATABASE_URL.startswith("sqlite"):
     Base.metadata.create_all(bind=engine)

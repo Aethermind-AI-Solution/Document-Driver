@@ -96,17 +96,24 @@ reject, export CSV.
 |-----|-------|----------|-------------------|
 | `CORS_ORIGINS` | Render (backend) | For production | comma-separated origins, e.g. `https://aethermind.vercel.app` |
 | `NEXT_PUBLIC_API_URL` | Vercel (frontend) | Yes | `https://aethermind-backend.onrender.com` |
+| `DATABASE_URL` | Render (backend) | **Yes, in production** | Neon Postgres, psycopg v3 scheme: `postgresql+psycopg://user:password@host/db`. Local dev defaults to SQLite (`sqlite:///./database/document_intelligence.db`) if unset — dev-only, not for production. |
+| `JWT_SECRET` | Render (backend) | **Yes, in production** | strong random secret (e.g. 32 random bytes, base64-encoded); boot fails fast if unset/default while `DATABASE_URL` is non-sqlite (see Phase 1 below) |
+| `STORAGE_BACKEND` | Render (backend) | For production | `local` (default, ephemeral) or `s3` for durable storage via Cloudflare R2 |
+| `R2_ENDPOINT` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Render (backend) | Required if `STORAGE_BACKEND=s3` | Cloudflare R2 bucket credentials — see Phase 1 below |
 | `OPENAI_API_KEY` | Render (backend) | No | blank → deterministic fallback extraction |
 | `OPENAI_MODEL` | Render (backend) | No | `gpt-4o` (set in `render.yaml`; use `gpt-4o-mini` to cut cost) |
 | `PYTHON_VERSION` | Render (backend) | No | `3.12.8` (set in `render.yaml`) |
-| `DATABASE_URL` / `UPLOAD_DIR` / `EXPORT_DIR` | Render (backend) | No | default local paths; override to point at a persistent disk later |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Render (backend) | For production | seeds the bootstrap admin user on first startup — see Phase 1 below |
+| `UPLOAD_DIR` / `EXPORT_DIR` | Render (backend) | No | local filesystem paths, only relevant when `STORAGE_BACKEND=local` |
 
 ## Caveats on the free tier
 
-- **Data is ephemeral.** No persistent disk on Render free → the SQLite DB and
-  uploaded files reset on every redeploy (and if the service is ever recycled).
-  Fine for a demo. To persist later: add a Render Disk (paid) and set
-  `DATABASE_URL`/`UPLOAD_DIR`/`EXPORT_DIR` to a path on it, or move to Postgres + S3.
+- **SQLite/local storage is dev-only.** Without `DATABASE_URL` and
+  `STORAGE_BACKEND=s3` set, the backend falls back to SQLite + local files. On
+  Render free (no persistent disk) that data resets on every redeploy or
+  recycle — fine for a quick throwaway demo, but not for a real deployment.
+  For a persistent deployment, follow **Phase 1** below (Postgres + R2 + JWT
+  auth) — that is the supported production setup, not an optional upgrade.
 - **First deploy build** installs PyMuPDF/Pillow — takes a few minutes; subsequent
   deploys are faster.
 
