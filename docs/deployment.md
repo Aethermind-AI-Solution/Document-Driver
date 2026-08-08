@@ -110,6 +110,59 @@ reject, export CSV.
 - **First deploy build** installs PyMuPDF/Pillow — takes a few minutes; subsequent
   deploys are faster.
 
+## Phase 1 — Production persistence & identity
+
+Upgrade from ephemeral SQLite + local file storage to Postgres + S3-compatible object storage (Cloudflare R2), with JWT auth and role-based access control.
+
+### 1. Provision Neon Postgres
+
+1. **Create account** at [Neon](https://neon.tech).
+2. **New project** → note the connection string, e.g.:
+   ```
+   postgres://user:password@ep-xxx.us-east-1.neon.tech/dbname
+   ```
+3. Convert to psycopg v3 URL scheme (required; v2 will fail):
+   ```
+   DATABASE_URL=postgresql+psycopg://user:password@ep-xxx.us-east-1.neon.tech/dbname
+   ```
+4. Set in Render (backend) environment variables.
+
+### 2. Provision Cloudflare R2 (S3-compatible object storage)
+
+1. **Cloudflare dashboard** → R2 → **Create bucket** named `aethermind`.
+2. **Create API token** (R2 API) for this bucket; note:
+   - **Access Key ID** (`R2_ACCESS_KEY_ID`)
+   - **Secret Access Key** (`R2_SECRET_ACCESS_KEY`)
+   - **Endpoint URL** (`R2_ENDPOINT`), e.g. `https://abc123.r2.cloudflarestorage.com`
+3. Set in Render environment:
+   ```
+   STORAGE_BACKEND=s3
+   R2_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+   R2_BUCKET=aethermind
+   R2_ACCESS_KEY_ID=<token>
+   R2_SECRET_ACCESS_KEY=<secret>
+   ```
+
+### 3. Set JWT secret & bootstrap admin
+
+1. Generate a strong `JWT_SECRET` (e.g. 32 random bytes, base64-encoded).
+2. Set in Render:
+   ```
+   JWT_SECRET=<your-secret>
+   JWT_EXPIRE_HOURS=12
+   ADMIN_EMAIL=you@example.com
+   ADMIN_PASSWORD=<temp-password>
+   ```
+3. On first backend startup, the system seeds one admin user with these credentials (idempotent — only creates if the `users` table is empty).
+
+### 4. Database migrations
+
+Render's `render.yaml` is configured to run `alembic upgrade head` on every deploy. Fresh deployments automatically apply all pending migrations; no manual action needed.
+
+### 5. Deprecation
+
+The old `DEMO_ACCESS_TOKEN` gate has been removed. All endpoints now require JWT auth (except `/health` and `/docs`). Use the admin bootstrap credentials to log in and manage users and roles.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:
