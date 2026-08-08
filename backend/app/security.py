@@ -1,17 +1,7 @@
-import secrets, time
+import time
 from collections import defaultdict
-from fastapi import Header, HTTPException, Request
+from fastapi import HTTPException, Request
 from . import config
-
-
-def require_access(request: Request, x_access_token: str | None = Header(default=None)):
-    """Gate every route (except /health) behind a shared token when one is configured."""
-    if not config.DEMO_ACCESS_TOKEN:
-        return
-    if request.url.path == "/health":
-        return
-    if not (x_access_token and secrets.compare_digest(x_access_token, config.DEMO_ACCESS_TOKEN)):
-        raise HTTPException(401, "Invalid or missing access token")
 
 
 class SlidingWindowRateLimiter:

@@ -1,13 +1,17 @@
-import base64, json, os, re, time
+import base64, json, os, re, time, tempfile
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition
+from .auth import hash_password
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
+from . import storage
 
-def log(db: Session, document_id: int, action: str, details: str = ""):
-    db.add(AuditLog(document_id=document_id, action=action, details=details))
+def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
+    db.add(AuditLog(document_id=document_id, action=action, details=details,
+                    actor_id=getattr(actor, "id", None),
+                    actor_email=getattr(actor, "email", None)))
 
 def resolve_review_action(action: str, reason: str | None) -> dict:
     """Map a review action to status/flag overrides and an audit entry.
@@ -191,11 +195,18 @@ def ai_extract(text: str, fields: list[dict], source_path: str):
         return openai_extract(text, fields, source_path)
     return fallback_extract(text, fields)
 
-def process_document(db: Session, document: Document):
+def process_document(db: Session, document: Document, actor=None):
     started = time.perf_counter(); document.status = "processing"; db.commit()
     try:
         schema = schema_for(db, document.document_type)
-        values = ai_extract(extract_text(document.stored_path), schema["fields"], document.stored_path)
+        data = storage.get_storage().open(document.stored_path)
+        suffix = Path(document.stored_path).suffix
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        try:
+            tmp.write(data); tmp.close()
+            values = ai_extract(extract_text(tmp.name), schema["fields"], tmp.name)
+        finally:
+            os.unlink(tmp.name)
         db.query(ExtractedField).filter_by(document_id=document.id).delete()
         definitions = {field["name"]: field for field in schema["fields"]}
         for field in values:
@@ -205,7 +216,20 @@ def process_document(db: Session, document: Document):
         document.review_required = any(v["confidence"] < .9 or not v["validated"] for v in values)
         document.status = "review_required" if document.review_required else "processed"
         document.processing_time = round(time.perf_counter() - started, 2)
-        log(db, document.id, "Processed", f"Applied {document.document_type} schema")
+        log(db, document.id, "Processed", f"Applied {document.document_type} schema", actor=actor)
         db.commit(); db.refresh(document); return document
     except Exception as exc:
-        document.status = "error"; log(db, document.id, "Processing failed", str(exc)); db.commit(); raise
+        document.status = "error"; log(db, document.id, "Processing failed", str(exc), actor=actor); db.commit(); raise
+
+def create_user(db: Session, email: str, password: str, role: str) -> User:
+    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)
+    db.add(user); db.commit(); db.refresh(user)
+    return user
+
+def bootstrap_admin(db: Session) -> None:
+    from .config import ADMIN_EMAIL, ADMIN_PASSWORD
+    if not (ADMIN_EMAIL and ADMIN_PASSWORD):
+        return
+    if db.query(User).count() > 0:
+        return
+    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")

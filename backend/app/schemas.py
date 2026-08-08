@@ -24,3 +24,29 @@ class SchemaPayload(BaseModel):
     key: str = Field(pattern=r"^[a-z0-9_-]+$")
     name: str
     fields: list[SchemaFieldDef] = Field(min_length=1)
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: "UserOut"
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    role: str
+    is_active: bool
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+class UserCreate(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+    role: Literal["admin", "reviewer", "viewer"] = "reviewer"
+
+TokenResponse.model_rebuild()

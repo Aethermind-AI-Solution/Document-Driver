@@ -20,6 +20,7 @@ vi.mock("../lib/api", () => ({
   setToken: () => {},
   clearToken: () => {},
   downloadFile: vi.fn(),
+  me: vi.fn(async () => ({ id: 1, email: "a@b.co", role: "admin", is_active: true })),
   api: vi.fn(async (path: string, init?: any) => {
     const method = init?.method || "GET";
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];

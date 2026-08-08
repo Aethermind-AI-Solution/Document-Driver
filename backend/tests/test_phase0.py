@@ -6,13 +6,16 @@ from app.models import Document, ExtractedField
 # --- Q2: store the original AI value separately from the human-corrected value ---
 
 def test_process_captures_original_value(db_session, monkeypatch):
-    from app import services
+    from app import services, storage
     monkeypatch.setattr(services, "extract_text", lambda path: "Total 500")
     monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
         {"field_name": "total", "field_value": "500", "source_quote": None,
          "grounded": "grounded", "confidence": 0.95},
     ])
-    doc = Document(filename="x.pdf", document_type="invoice", stored_path="/x.pdf")
+    # Mock storage to return dummy PDF bytes
+    mock_storage = lambda: type('obj', (object,), {'open': lambda self, key: b"dummy-pdf-bytes"})()
+    monkeypatch.setattr(storage, "get_storage", mock_storage)
+    doc = Document(filename="x.pdf", document_type="invoice", stored_path="x.pdf")
     db_session.add(doc); db_session.commit(); db_session.refresh(doc)
     services.process_document(db_session, doc)
     field = db_session.query(ExtractedField).filter_by(document_id=doc.id, field_name="total").first()

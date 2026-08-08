@@ -40,6 +40,17 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(120))
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="reviewer")  # admin|reviewer|viewer
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 class SchemaDefinition(Base):
     __tablename__ = "schema_definitions"

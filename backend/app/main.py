@@ -6,21 +6,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
-from . import config
-from .security import rate_limit, require_access
+from . import auth, config
+from .security import rate_limit
 from .database import Base, engine, get_db
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition
-from .schemas import DocumentUpdate, SchemaPayload
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
+from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
+from .storage import get_storage
 
-Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Document Intelligence Engine", version="1.0.0", dependencies=[Depends(require_access)])
+# Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
+config.check_production_config()
+
+# Tests/dev create the schema directly; prod runs Alembic migrations on deploy.
+if config.DATABASE_URL.startswith("sqlite"):
+    Base.metadata.create_all(bind=engine)
+app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def _bootstrap():
+    from .services import bootstrap_admin
+    db = next(get_db())
+    try:
+        bootstrap_admin(db)
+    finally:
+        db.close()
 
 def _parse_rows(value):
     """Return a list-of-row-dicts if the field value is a JSON table (line_items),
@@ -56,55 +71,104 @@ def _to_csv(fields: list[dict]) -> str:
     return stream.getvalue()
 
 def serialize(d: Document):
-    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details} for a in d.audit_logs]}
+    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details,"actor_email":a.actor_email} for a in d.audit_logs]}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
 
+@app.post("/auth/login", response_model=TokenResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter_by(email=payload.email).first()
+    if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
+        raise HTTPException(401, "Invalid email or password")
+    return {"access_token": auth.create_access_token(user), "token_type": "bearer",
+            "user": {"id": user.id, "email": user.email, "role": user.role, "is_active": user.is_active}}
+
+@app.get("/auth/me", response_model=UserOut)
+def me(user: User = Depends(auth.get_current_user)):
+    return {"id": user.id, "email": user.email, "role": user.role, "is_active": user.is_active}
+
+@app.post("/auth/change-password")
+def change_password(payload: PasswordChange, db: Session = Depends(get_db),
+                    user: User = Depends(auth.get_current_user)):
+    if not auth.verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(400, "Current password is incorrect")
+    user.password_hash = auth.hash_password(payload.new_password); db.commit()
+    return {"status": "ok"}
+
+@app.get("/users", response_model=list[UserOut])
+def list_users(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    return [{"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
+            for u in db.query(User).order_by(User.created_at.desc()).all()]
+
+@app.post("/users", status_code=201, response_model=UserOut)
+def create_user_endpoint(payload: UserCreate, db: Session = Depends(get_db),
+                         _: User = Depends(auth.require_role("admin"))):
+    if db.query(User).filter_by(email=payload.email).first():
+        raise HTTPException(409, "Email already exists")
+    from .services import create_user
+    u = create_user(db, payload.email, payload.password, payload.role)
+    return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
+
+@app.patch("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: int, role: str | None = None, is_active: bool | None = None,
+                db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    if role is not None and role not in {"admin", "reviewer", "viewer"}:
+        raise HTTPException(400, "Invalid role")
+    u = db.get(User, user_id)
+    if not u: raise HTTPException(404, "User not found")
+    if role is not None: u.role = role
+    if is_active is not None: u.is_active = is_active
+    db.commit()
+    return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
+
 @app.get("/schemas")
-def list_schemas(db: Session = Depends(get_db)): return available_schemas(db)
+def list_schemas(db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)): return available_schemas(db)
 
 @app.post("/schemas", status_code=201)
-def create_schema(payload: SchemaPayload, db: Session = Depends(get_db)):
+def create_schema(payload: SchemaPayload, db: Session = Depends(get_db),
+                  _: User = Depends(auth.require_role("admin"))):
     if payload.key in [s["key"] for s in available_schemas(db)]: raise HTTPException(409, "Schema key already exists")
     item = SchemaDefinition(**payload.model_dump()); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
 
 @app.post("/upload", status_code=201, dependencies=[Depends(rate_limit)])
-async def upload(file: UploadFile = File(...), document_type: str = "invoice", db: Session = Depends(get_db)):
+async def upload(file: UploadFile = File(...), document_type: str = "invoice", db: Session = Depends(get_db),
+                 user: User = Depends(auth.require_role("admin", "reviewer"))):
     if Path(file.filename or "").suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}: raise HTTPException(400, "Only PDF, PNG, and JPEG are supported")
     try: schema_for(db, document_type)
     except ValueError as exc: raise HTTPException(400, str(exc))
     data = await file.read()
     if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, f"File exceeds the {config.MAX_UPLOAD_MB} MB limit")
     safe_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
-    destination = config.UPLOAD_DIR / safe_name
-    destination.write_bytes(data)
-    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=str(destination))
-    db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}"); db.commit(); db.refresh(doc)
+    key = get_storage().save(safe_name, data)
+    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=key)
+    db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}", actor=user); db.commit(); db.refresh(doc)
     return serialize(doc)
 
 @app.post("/process/{document_id}", dependencies=[Depends(rate_limit)])
-def process(document_id: int, db: Session = Depends(get_db)):
+def process(document_id: int, db: Session = Depends(get_db),
+           user: User = Depends(auth.require_role("admin", "reviewer"))):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
-    try: return serialize(process_document(db, doc))
+    try: return serialize(process_document(db, doc, actor=user))
     except Exception as exc: raise HTTPException(500, f"Processing failed: {exc}")
 
 @app.get("/documents")
-def documents(q: str = "", status: str = "", db: Session = Depends(get_db)):
+def documents(q: str = "", status: str = "", db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
     query = db.query(Document)
     if q: query = query.filter(Document.filename.ilike(f"%{q}%"))
     if status: query = query.filter(Document.status == status)
     return [serialize(d) for d in query.order_by(Document.upload_date.desc()).all()]
 
 @app.get("/document/{document_id}")
-def document(document_id: int, db: Session = Depends(get_db)):
+def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
     return serialize(doc)
 
 @app.put("/document/{document_id}")
-def update_document(document_id: int, payload: DocumentUpdate, db: Session = Depends(get_db)):
+def update_document(document_id: int, payload: DocumentUpdate, db: Session = Depends(get_db),
+                    user: User = Depends(auth.require_role("admin", "reviewer"))):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
     for change in payload.fields:
@@ -115,14 +179,14 @@ def update_document(document_id: int, payload: DocumentUpdate, db: Session = Dep
     outcome = resolve_review_action(payload.action, payload.reason)
     if outcome["status"] is not None: doc.status = outcome["status"]
     if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
-    log(db, doc.id, outcome["log_action"], outcome["log_details"])
+    log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
     db.commit(); db.refresh(doc); return serialize(doc)
 
 @app.get("/export/{document_id}")
-def export(document_id: int, format: str = "json", db: Session = Depends(get_db)):
+def export(document_id: int, format: str = "json", db: Session = Depends(get_db), user: User = Depends(auth.get_current_user)):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
-    log(db, doc.id, "Exported", format.upper()); db.commit(); data = serialize(doc)
+    log(db, doc.id, "Exported", format.upper(), actor=user); db.commit(); data = serialize(doc)
     if format == "json": return data
     if format != "csv": raise HTTPException(400, "format must be csv or json")
     return StreamingResponse(iter([_to_csv(data["fields"])]), media_type="text/csv", headers={"Content-Disposition":f'attachment; filename="document-{doc.id}.csv"'})

@@ -19,13 +19,28 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 # local dev; in production set CORS_ORIGINS to the deployed frontend URL(s),
 # e.g. "https://aethermind.vercel.app".
 CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
-DEMO_ACCESS_TOKEN = os.getenv("DEMO_ACCESS_TOKEN", "")   # empty ⇒ gate disabled
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "20"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))
+STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local")  # "local" | "s3"
+R2_ENDPOINT = os.getenv("R2_ENDPOINT", "")
+R2_BUCKET = os.getenv("R2_BUCKET", "")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+S3_REGION = os.getenv("S3_REGION", "auto")  # "auto" for R2; Supabase/B2 need their real region
 for directory in (UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 # Fresh deployments start with an empty tree, so make sure the SQLite database
 # directory exists before SQLAlchemy tries to open the file.
 if DATABASE_URL.startswith("sqlite:///"):
     Path(DATABASE_URL.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-insecure-secret-change-me")
+JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
+
+def check_production_config():
+    """Refuse to boot in prod (non-sqlite DB) with an insecure/blank JWT secret."""
+    if not DATABASE_URL.startswith("sqlite") and JWT_SECRET in ("", "dev-insecure-secret-change-me"):
+        raise RuntimeError("JWT_SECRET must be set to a strong value in production (non-sqlite DATABASE_URL).")

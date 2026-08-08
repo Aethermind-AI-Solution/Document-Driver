@@ -96,19 +96,79 @@ reject, export CSV.
 |-----|-------|----------|-------------------|
 | `CORS_ORIGINS` | Render (backend) | For production | comma-separated origins, e.g. `https://aethermind.vercel.app` |
 | `NEXT_PUBLIC_API_URL` | Vercel (frontend) | Yes | `https://aethermind-backend.onrender.com` |
+| `DATABASE_URL` | Render (backend) | **Yes, in production** | Neon Postgres, psycopg v3 scheme: `postgresql+psycopg://user:password@host/db`. Local dev defaults to SQLite (`sqlite:///./database/document_intelligence.db`) if unset — dev-only, not for production. |
+| `JWT_SECRET` | Render (backend) | **Yes, in production** | strong random secret (e.g. 32 random bytes, base64-encoded); boot fails fast if unset/default while `DATABASE_URL` is non-sqlite (see Phase 1 below) |
+| `STORAGE_BACKEND` | Render (backend) | For production | `local` (default, ephemeral) or `s3` for durable storage via Cloudflare R2 |
+| `R2_ENDPOINT` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | Render (backend) | Required if `STORAGE_BACKEND=s3` | Cloudflare R2 bucket credentials — see Phase 1 below |
 | `OPENAI_API_KEY` | Render (backend) | No | blank → deterministic fallback extraction |
 | `OPENAI_MODEL` | Render (backend) | No | `gpt-4o` (set in `render.yaml`; use `gpt-4o-mini` to cut cost) |
 | `PYTHON_VERSION` | Render (backend) | No | `3.12.8` (set in `render.yaml`) |
-| `DATABASE_URL` / `UPLOAD_DIR` / `EXPORT_DIR` | Render (backend) | No | default local paths; override to point at a persistent disk later |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Render (backend) | For production | seeds the bootstrap admin user on first startup — see Phase 1 below |
+| `UPLOAD_DIR` / `EXPORT_DIR` | Render (backend) | No | local filesystem paths, only relevant when `STORAGE_BACKEND=local` |
 
 ## Caveats on the free tier
 
-- **Data is ephemeral.** No persistent disk on Render free → the SQLite DB and
-  uploaded files reset on every redeploy (and if the service is ever recycled).
-  Fine for a demo. To persist later: add a Render Disk (paid) and set
-  `DATABASE_URL`/`UPLOAD_DIR`/`EXPORT_DIR` to a path on it, or move to Postgres + S3.
+- **SQLite/local storage is dev-only.** Without `DATABASE_URL` and
+  `STORAGE_BACKEND=s3` set, the backend falls back to SQLite + local files. On
+  Render free (no persistent disk) that data resets on every redeploy or
+  recycle — fine for a quick throwaway demo, but not for a real deployment.
+  For a persistent deployment, follow **Phase 1** below (Postgres + R2 + JWT
+  auth) — that is the supported production setup, not an optional upgrade.
 - **First deploy build** installs PyMuPDF/Pillow — takes a few minutes; subsequent
   deploys are faster.
+
+## Phase 1 — Production persistence & identity
+
+Upgrade from ephemeral SQLite + local file storage to Postgres + S3-compatible object storage (Cloudflare R2), with JWT auth and role-based access control.
+
+### 1. Provision Neon Postgres
+
+1. **Create account** at [Neon](https://neon.tech).
+2. **New project** → note the connection string, e.g.:
+   ```
+   postgres://user:password@ep-xxx.us-east-1.neon.tech/dbname
+   ```
+3. Convert to psycopg v3 URL scheme (required; v2 will fail):
+   ```
+   DATABASE_URL=postgresql+psycopg://user:password@ep-xxx.us-east-1.neon.tech/dbname
+   ```
+4. Set in Render (backend) environment variables.
+
+### 2. Provision Cloudflare R2 (S3-compatible object storage)
+
+1. **Cloudflare dashboard** → R2 → **Create bucket** named `aethermind`.
+2. **Create API token** (R2 API) for this bucket; note:
+   - **Access Key ID** (`R2_ACCESS_KEY_ID`)
+   - **Secret Access Key** (`R2_SECRET_ACCESS_KEY`)
+   - **Endpoint URL** (`R2_ENDPOINT`), e.g. `https://abc123.r2.cloudflarestorage.com`
+3. Set in Render environment:
+   ```
+   STORAGE_BACKEND=s3
+   R2_ENDPOINT=https://abc123.r2.cloudflarestorage.com
+   R2_BUCKET=aethermind
+   R2_ACCESS_KEY_ID=<token>
+   R2_SECRET_ACCESS_KEY=<secret>
+   ```
+
+### 3. Set JWT secret & bootstrap admin
+
+1. Generate a strong `JWT_SECRET` (e.g. 32 random bytes, base64-encoded).
+2. Set in Render:
+   ```
+   JWT_SECRET=<your-secret>
+   JWT_EXPIRE_HOURS=12
+   ADMIN_EMAIL=you@example.com
+   ADMIN_PASSWORD=<temp-password>
+   ```
+3. On first backend startup, the system seeds one admin user with these credentials (idempotent — only creates if the `users` table is empty).
+
+### 4. Database migrations
+
+Render's `render.yaml` is configured to run `alembic upgrade head` on every deploy. Fresh deployments automatically apply all pending migrations; no manual action needed.
+
+### 5. Deprecation
+
+The old `DEMO_ACCESS_TOKEN` gate has been removed. All endpoints now require JWT auth (except `/health` and `/docs`). Use the admin bootstrap credentials to log in and manage users and roles.
 
 ## Local development is unchanged
 

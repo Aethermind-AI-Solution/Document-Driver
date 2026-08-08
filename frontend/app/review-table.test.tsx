@@ -15,6 +15,7 @@ const doc = {
 
 vi.mock("../lib/api", () => ({
   getToken: () => "", setToken: () => {}, clearToken: () => {}, downloadFile: vi.fn(),
+  me: vi.fn(async () => ({ id: 1, email: "a@b.co", role: "admin", is_active: true })),
   api: vi.fn(async (path: string) => {
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
     if (path === "/documents") return [doc];
