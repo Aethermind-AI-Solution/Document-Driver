@@ -1,5 +1,3 @@
-import asyncio
-import inspect
 import json
 from .. import config, services
 from .base import PipelineContext, StageResult, timed_stage
@@ -36,11 +34,7 @@ class ClassifierAgent:
             schemas = services.available_schemas(c.db)
             keys = [s["key"] for s in schemas]
             text = c.pages[0]["text"] if c.pages else ""
-            result = classify_document(text, keys)
-            if inspect.iscoroutine(result):
-                key, conf = await result
-            else:
-                key, conf = result
+            key, conf = await classify_document(text, keys)
             chosen = key if (key in keys and conf >= 0.5) else (
                 c.hint_type if c.hint_type in keys else "invoice")
             if key and key != c.hint_type:

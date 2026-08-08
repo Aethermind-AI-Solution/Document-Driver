@@ -14,8 +14,9 @@ def _ctx(db, hint="purchase_order"):
 
 
 def test_classifier_uses_llm_result(db_session, monkeypatch):
-    monkeypatch.setattr(classifier, "classify_document",
-                        lambda text, keys: ("invoice", 0.97))
+    async def fake(text, keys):
+        return ("invoice", 0.97)
+    monkeypatch.setattr(classifier, "classify_document", fake)
     ctx = _ctx(db_session)
     asyncio.run(classifier.ClassifierAgent().run(ctx))
     assert ctx.document.document_type == "invoice"
@@ -23,17 +24,23 @@ def test_classifier_uses_llm_result(db_session, monkeypatch):
 
 
 def test_classifier_falls_back_to_hint_on_low_conf(db_session, monkeypatch):
-    monkeypatch.setattr(classifier, "classify_document",
-                        lambda text, keys: ("invoice", 0.10))
+    async def fake(text, keys):
+        return ("invoice", 0.10)
+    monkeypatch.setattr(classifier, "classify_document", fake)
     ctx = _ctx(db_session, hint="purchase_order")
     asyncio.run(classifier.ClassifierAgent().run(ctx))
     assert ctx.document.document_type == "purchase_order"
 
 
 def test_classifier_falls_back_on_error(db_session, monkeypatch):
-    def boom(text, keys):
+    async def fake(text, keys):
         return (None, 0.0)
-    monkeypatch.setattr(classifier, "classify_document", boom)
-    ctx = _ctx(db_session, hint="invoice")
+    monkeypatch.setattr(classifier, "classify_document", fake)
+    ctx = _ctx(db_session, hint="purchase_order")
     asyncio.run(classifier.ClassifierAgent().run(ctx))
-    assert ctx.document.document_type == "invoice"
+    assert ctx.document.document_type == "purchase_order"
+    # Verify that schema is set from the hint, not just pre-seeded
+    assert ctx.schema is not None
+    # Verify it's the purchase_order schema by checking expected fields
+    field_names = [f["name"] for f in ctx.schema["fields"]]
+    assert "po_number" in field_names and "supplier_name" in field_names
