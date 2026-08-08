@@ -70,3 +70,23 @@ def test_process_reads_bytes_through_storage(db_session, monkeypatch, tmp_path):
     field = db_session.query(ExtractedField).filter_by(document_id=doc.id, field_name="total").first()
     assert field.field_value == "500" and field.original_value == "500"
     assert doc.pipeline_trace and len(doc.pipeline_trace) == 4
+
+
+def test_s3_storage_uses_region_and_path_style(monkeypatch):
+    import boto3
+    from app.storage import S3Storage
+    captured = {}
+
+    def fake_client(service, **kwargs):
+        captured["service"] = service
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    S3Storage("https://ref.supabase.co/storage/v1/s3", "aethermind", "ak", "sk", region="us-east-1")
+    assert captured["service"] == "s3"
+    assert captured["region_name"] == "us-east-1"
+    assert captured["endpoint_url"] == "https://ref.supabase.co/storage/v1/s3"
+    cfg = captured["config"]
+    assert cfg.signature_version == "s3v4"
+    assert cfg.s3["addressing_style"] == "path"

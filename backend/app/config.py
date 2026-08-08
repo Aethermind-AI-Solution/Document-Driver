@@ -27,6 +27,7 @@ R2_ENDPOINT = os.getenv("R2_ENDPOINT", "")
 R2_BUCKET = os.getenv("R2_BUCKET", "")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+S3_REGION = os.getenv("S3_REGION", "auto")  # "auto" for R2; Supabase/B2 need their real region
 for directory in (UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 # Fresh deployments start with an empty tree, so make sure the SQLite database
