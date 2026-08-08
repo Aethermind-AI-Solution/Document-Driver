@@ -7,11 +7,18 @@ from app.models import Document, ExtractedField
 
 def test_process_captures_original_value(db_session, monkeypatch):
     from app import services, storage
+    from app.agents import classifier as agent_classifier
+
+    async def fake_classify(text, keys):
+        return ("invoice", 0.99)
+    monkeypatch.setattr(agent_classifier, "classify_document", fake_classify)
     monkeypatch.setattr(services, "extract_text", lambda path: "Total 500")
     monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
         {"field_name": "total", "field_value": "500", "source_quote": None,
          "grounded": "grounded", "confidence": 0.95},
     ])
+    monkeypatch.setattr("app.agents.pipeline.split_pages",
+                        lambda data, suffix: [{"index": 0, "pdf_bytes": b"", "text": "Total 500"}])
     # Mock storage to return dummy PDF bytes
     mock_storage = lambda: type('obj', (object,), {'open': lambda self, key: b"dummy-pdf-bytes"})()
     monkeypatch.setattr(storage, "get_storage", mock_storage)

@@ -38,6 +38,9 @@ JWT_SECRET = os.getenv("JWT_SECRET", "dev-insecure-secret-change-me")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "gpt-4o-mini")
+PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "5"))
+PIPELINE_STAGE_TIMEOUT = int(os.getenv("PIPELINE_STAGE_TIMEOUT", "60"))
 
 
 def check_production_config():

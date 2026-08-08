@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveAgentTimeline, titleize, type TimelineField } from "./agent-timeline";
+import { deriveAgentTimeline, titleize, traceToSteps, type TimelineField } from "./agent-timeline";
 
 const field = (over: Partial<TimelineField>): TimelineField => ({
   field_name: "vendor_name",
@@ -93,5 +93,17 @@ describe("deriveAgentTimeline", () => {
     expect(byAgent(steps, "Extraction Agent").message).toBe("0 fields extracted");
     expect(byAgent(steps, "Validation Agent").status).toBe("complete");
     expect(byAgent(steps, "Review Agent").status).toBe("complete");
+  });
+});
+
+describe("traceToSteps", () => {
+  it("maps backend trace entries to agent steps with status", () => {
+    const steps = traceToSteps([
+      { name: "Classifier", status: "ok", detail: "invoice (0.97)", duration_ms: 120 },
+      { name: "Validator", status: "attention", detail: "1 anomaly(ies)", duration_ms: 5 },
+    ]);
+    expect(steps.map((s) => s.agent)).toEqual(["Classifier", "Validator"]);
+    expect(steps[0]).toMatchObject({ status: "complete", message: "invoice (0.97)" });
+    expect(steps[1]).toMatchObject({ status: "attention" });
   });
 });

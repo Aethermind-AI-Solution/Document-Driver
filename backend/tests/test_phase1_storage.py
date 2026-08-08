@@ -38,22 +38,38 @@ def test_get_storage_s3_fast_fail_missing_config(monkeypatch):
 
 def test_process_reads_bytes_through_storage(db_session, monkeypatch, tmp_path):
     from app import config, services
-    from app.models import Document
+    from app.models import Document, ExtractedField
+    from app.agents import classifier as agent_classifier
     monkeypatch.setattr(config, "STORAGE_BACKEND", "local")
     monkeypatch.setattr(config, "UPLOAD_DIR", tmp_path)
     # a doc whose bytes live only in storage under its key
     from app.storage import LocalStorage
     LocalStorage(tmp_path).save("k.pdf", b"dummy-pdf-bytes")
+
+    # spy on storage reads so we can prove the pipeline read through storage
+    # (not just from some other in-memory path), instead of the old extract_text spy
     captured = {}
-    monkeypatch.setattr(services, "extract_text", lambda path: (captured.__setitem__("path", path), "Total 500")[1])
+    real_open = LocalStorage.open
+
+    def spy_open(self, key):
+        captured["key"] = key
+        return real_open(self, key)
+    monkeypatch.setattr(LocalStorage, "open", spy_open)
+
+    async def fake_classify(text, keys):
+        return ("invoice", 0.99)
+    monkeypatch.setattr(agent_classifier, "classify_document", fake_classify)
     monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
         {"field_name": "total", "field_value": "500", "source_quote": None,
          "grounded": "grounded", "confidence": 0.95}])
     doc = Document(filename="k.pdf", document_type="invoice", stored_path="k.pdf")
     db_session.add(doc); db_session.commit(); db_session.refresh(doc)
     services.process_document(db_session, doc)
-    # extract_text received a real temp file path (not the storage key)
-    assert captured["path"].endswith(".pdf") and captured["path"] != "k.pdf"
+    # storage.open() was actually exercised with the document's stored key
+    assert captured["key"] == "k.pdf"
+    field = db_session.query(ExtractedField).filter_by(document_id=doc.id, field_name="total").first()
+    assert field.field_value == "500" and field.original_value == "500"
+    assert doc.pipeline_trace and len(doc.pipeline_trace) == 4
 
 
 def test_s3_storage_uses_region_and_path_style(monkeypatch):

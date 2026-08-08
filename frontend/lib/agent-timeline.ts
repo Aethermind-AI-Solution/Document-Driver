@@ -59,3 +59,14 @@ export function deriveAgentTimeline(input: {
     review,
   ];
 }
+
+export type TraceEntry = { name: string; status: string; detail: string; duration_ms: number };
+
+export function traceToSteps(trace: TraceEntry[]): AgentStep[] {
+  const map: Record<string, AgentStatus> = { ok: "complete", attention: "attention", error: "attention" };
+  return trace.map((t) => ({
+    agent: t.name,
+    status: map[t.status] ?? "complete",
+    message: t.detail || t.name,
+  }));
+}

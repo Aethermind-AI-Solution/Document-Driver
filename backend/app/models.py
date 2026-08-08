@@ -17,6 +17,8 @@ class Document(Base):
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     review_required: Mapped[bool] = mapped_column(Boolean, default=True)
     stored_path: Mapped[str] = mapped_column(Text)
+    pipeline_trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    anomalies: Mapped[list | None] = mapped_column(JSON, nullable=True)
     extracted_fields: Mapped[list["ExtractedField"]] = relationship(cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(cascade="all, delete-orphan")
 
