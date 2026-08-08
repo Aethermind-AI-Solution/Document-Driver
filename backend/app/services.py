@@ -195,31 +195,11 @@ def ai_extract(text: str, fields: list[dict], source_path: str):
         return openai_extract(text, fields, source_path)
     return fallback_extract(text, fields)
 
-def process_document(db: Session, document: Document, actor=None):
-    started = time.perf_counter(); document.status = "processing"; db.commit()
-    try:
-        schema = schema_for(db, document.document_type)
-        data = storage.get_storage().open(document.stored_path)
-        suffix = Path(document.stored_path).suffix
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
-            tmp.write(data); tmp.close()
-            values = ai_extract(extract_text(tmp.name), schema["fields"], tmp.name)
-        finally:
-            os.unlink(tmp.name)
-        db.query(ExtractedField).filter_by(document_id=document.id).delete()
-        definitions = {field["name"]: field for field in schema["fields"]}
-        for field in values:
-            field["validated"] = passes_validation(definitions[field["field_name"]], field["field_value"])
-            db.add(ExtractedField(document_id=document.id, original_value=field["field_value"], **field))
-        document.confidence = sum(v["confidence"] for v in values) / max(len(values), 1)
-        document.review_required = any(v["confidence"] < .9 or not v["validated"] for v in values)
-        document.status = "review_required" if document.review_required else "processed"
-        document.processing_time = round(time.perf_counter() - started, 2)
-        log(db, document.id, "Processed", f"Applied {document.document_type} schema", actor=actor)
-        db.commit(); db.refresh(document); return document
-    except Exception as exc:
-        document.status = "error"; log(db, document.id, "Processing failed", str(exc), actor=actor); db.commit(); raise
+def process_document(db: Session, document: Document, actor=None) -> Document:
+    """Sync entry point: runs the async agent pipeline to completion."""
+    import asyncio
+    from .agents.pipeline import run_pipeline
+    return asyncio.run(run_pipeline(db, document, document.document_type, actor))
 
 def create_user(db: Session, email: str, password: str, role: str) -> User:
     user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)
