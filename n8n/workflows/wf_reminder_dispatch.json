@@ -1,0 +1,235 @@
+{
+  "name": "wf_reminder_dispatch",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -880,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/outbox/pending?limit=100' }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-pending-outbox",
+      "name": "GET /v1/outbox/pending",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -640,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const rows = Array.isArray($json.items) ? $json.items : [];\nreturn rows.map((row) => ({ json: row }));"
+      },
+      "id": "expand-items",
+      "name": "Expand Outbox Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId || $json.chat_id }}",
+        "text": "={{ $json.payload?.text || 'Appointment update from clinic.' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-telegram",
+      "name": "Send Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -180,
+        20
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.error }}"
+            }
+          ]
+        }
+      },
+      "id": "if-send-failed",
+      "name": "If Send Failed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        60,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/outbox/' + $json.id + '/mark' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  status: 'sent',\n  retry_count: Number($json.retryCount || 0),\n  next_retry_at: null,\n  last_error: null\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mark-sent",
+      "name": "Mark Outbox Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const retryCount = Number($json.retryCount || 0) + 1;\nconst status = retryCount > Number($env.MAX_TOOL_RETRIES || 2) ? 'failed' : 'queued';\nconst nextRetry = new Date(Date.now() + Math.min(30, Math.pow(2, retryCount)) * 60000).toISOString();\nreturn [{\n  json: {\n    id: $json.id,\n    retry_count: retryCount,\n    status,\n    next_retry_at: status === 'queued' ? nextRetry : null,\n    last_error: $json.error?.message || 'Telegram send failure'\n  }\n}];"
+      },
+      "id": "build-failure-mark",
+      "name": "Build Failure Mark",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/outbox/' + $json.id + '/mark' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  status: $json.status,\n  retry_count: $json.retry_count,\n  next_retry_at: $json.next_retry_at,\n  last_error: $json.last_error\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mark-failed-or-queued",
+      "name": "Mark Outbox Failed/Queued",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "GET /v1/outbox/pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /v1/outbox/pending": {
+      "main": [
+        [
+          {
+            "node": "Expand Outbox Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Outbox Items": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram": {
+      "main": [
+        [
+          {
+            "node": "If Send Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Send Failed": {
+      "main": [
+        [
+          {
+            "node": "Build Failure Mark",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Outbox Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Failure Mark": {
+      "main": [
+        [
+          {
+            "node": "Mark Outbox Failed/Queued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000004",
+  "tags": []
+}

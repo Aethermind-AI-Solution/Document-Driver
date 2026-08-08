@@ -1,0 +1,185 @@
+{
+  "name": "wf_tool_executor_sheet",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "exec-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GSHEET_DOCUMENT_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $env.GSHEET_SHEET_NAME || 'Active Bookings' }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Appointment ID": "={{ $json.next_action.payload.appointment_id || $json.tool_request.payload.appointment_id }}",
+            "Patient Name": "={{ $json.next_action.payload.patient_name || $json.tool_request.payload.patient_name }}",
+            "Mobile Number": "={{ $json.next_action.payload.mobile || $json.tool_request.payload.mobile }}",
+            "Appointment Date": "={{ $json.next_action.payload.date || $json.tool_request.payload.date }}",
+            "Time Slot": "={{ $json.next_action.payload.time || $json.tool_request.payload.time }}",
+            "Status": "={{ $json.next_action.payload.status || $json.tool_request.payload.status || 'Confirmed' }}",
+            "Telegram Chat ID": "={{ $json.next_action.payload.telegram_chat_id || $json.tool_request.payload.telegram_chat_id }}",
+            "Calendar Event ID": "={{ $json.next_action.payload.calendar_event_id || $json.tool_request.payload.calendar_event_id }}"
+          },
+          "matchingColumns": [
+            "Appointment ID"
+          ]
+        }
+      },
+      "id": "sheet-upsert",
+      "name": "Google Sheets Upsert",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -280,
+        40
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "__REPLACE_GSHEETS_CREDENTIAL_ID__",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return [{\n  json: {\n    correlation_id: $('Execute Workflow Trigger').first().json.tool_request?.correlation_id || $('Execute Workflow Trigger').first().json.correlation_id,\n    tool_name: 'SHEET_UPSERT',\n    chat_id: $('Execute Workflow Trigger').first().json.next_action?.payload?.telegram_chat_id || $('Execute Workflow Trigger').first().json.tool_request?.payload?.telegram_chat_id,\n    tool_output: { success: true, raw: $json }\n  }\n}];"
+      },
+      "id": "build-sheet-result",
+      "name": "Build SHEET_UPSERT Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/tools/result' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  correlation_id: $json.correlation_id,\n  tool_name: $json.tool_name,\n  tool_output: $json.tool_output\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "post-tool-result",
+      "name": "POST /v1/tools/result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Build SHEET_UPSERT Result').first().json.chat_id }}",
+        "text": "={{ $json.reply_text || $json.next_action.reply_text || 'Update completed.' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-result-message",
+      "name": "Send Result Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        440,
+        40
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return [{\n  json: {\n    correlation_id: $('Execute Workflow Trigger').first().json.tool_request?.correlation_id || $('Execute Workflow Trigger').first().json.correlation_id,\n    tool_name: 'SHEET_UPSERT',\n    chat_id: $('Execute Workflow Trigger').first().json.next_action?.payload?.telegram_chat_id || $('Execute Workflow Trigger').first().json.tool_request?.payload?.telegram_chat_id,\n    tool_output: { success: false, error: $json.error?.message || 'Sheets upsert failed' }\n  }\n}];"
+      },
+      "id": "build-sheet-error-result",
+      "name": "Build SHEET_UPSERT Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        180
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Sheets Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Upsert": {
+      "main": [
+        [
+          {
+            "node": "Build SHEET_UPSERT Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build SHEET_UPSERT Result": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/tools/result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /v1/tools/result": {
+      "main": [
+        [
+          {
+            "node": "Send Result Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000003",
+  "tags": []
+}

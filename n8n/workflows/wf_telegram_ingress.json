@@ -1,0 +1,499 @@
+{
+  "name": "wf_telegram_ingress",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ]
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -860,
+        100
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "if-text-message",
+      "name": "If Text Message",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/inbound/telegram' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-correlation-id",
+              "value": "={{ $execution.id + '-' + $json.message.message_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  chat_id: String($json.message.chat.id),\n  message_id: String($json.message.message_id),\n  text: $json.message.text,\n  timestamp: $json.message.date ? new Date($json.message.date * 1000).toISOString() : new Date().toISOString(),\n  raw_payload: $json\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "http-inbound",
+      "name": "POST /v1/inbound/telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -420,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/session/advance' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-correlation-id",
+              "value": "={{ $json.correlation_id || ($execution.id + '-' + $('Telegram Trigger').first().json.message.message_id) }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  chat_id: String($('Telegram Trigger').first().json.message.chat.id),\n  message_id: String($('Telegram Trigger').first().json.message.message_id),\n  user_text: $('Telegram Trigger').first().json.message.text\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "http-session-advance",
+      "name": "POST /v1/session/advance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -200,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "ASK_USER",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "DONE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "RUN_TOOL",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "switch-action-kind",
+      "name": "Switch Action Kind",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        20,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "={{ $json.reply_text || $json.next_action.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-ask",
+      "name": "Send ASK_USER Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        -80
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "={{ $json.reply_text || $json.next_action.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-done",
+      "name": "Send DONE Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        20
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool }}",
+                    "rightValue": "CALENDAR_CHECK",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool }}",
+                    "rightValue": "CALENDAR_CREATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool }}",
+                    "rightValue": "CALENDAR_DELETE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool }}",
+                    "rightValue": "SHEET_UPSERT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "switch-tool",
+      "name": "Switch Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        260,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "wf_tool_executor_calendar",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "exec-calendar",
+      "name": "Execute wf_tool_executor_calendar",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "wf_tool_executor_sheet",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "exec-sheet",
+      "name": "Execute wf_tool_executor_sheet",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        520,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').first().json.message.chat.id }}",
+        "text": "Please send a text message so I can continue your booking.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-non-text-fallback",
+      "name": "Send Non-Text Fallback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -420,
+        220
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "If Text Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Text Message": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/inbound/telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Non-Text Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /v1/inbound/telegram": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/session/advance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /v1/session/advance": {
+      "main": [
+        [
+          {
+            "node": "Switch Action Kind",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Action Kind": {
+      "main": [
+        [
+          {
+            "node": "Send ASK_USER Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send DONE Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Switch Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Tool": {
+      "main": [
+        [
+          {
+            "node": "Execute wf_tool_executor_calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute wf_tool_executor_calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute wf_tool_executor_calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute wf_tool_executor_sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000001",
+  "tags": []
+}

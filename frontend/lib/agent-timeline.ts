@@ -7,7 +7,7 @@ export type TimelineField = {
   validated: boolean;
 };
 
-const UPPERCASE_TOKENS = new Set(["gst", "po", "bol", "erp", "id"]);
+const UPPERCASE_TOKENS = new Set(["gst", "gstin", "po", "bol", "erp", "id"]);
 
 export function titleize(snake: string): string {
   return snake

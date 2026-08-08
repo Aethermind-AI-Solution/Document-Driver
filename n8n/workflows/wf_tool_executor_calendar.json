@@ -1,0 +1,518 @@
+{
+  "name": "wf_tool_executor_calendar",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "exec-trigger",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -860,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool || $json.tool_request.tool }}",
+                    "rightValue": "CALENDAR_CHECK",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool || $json.tool_request.tool }}",
+                    "rightValue": "CALENDAR_CREATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.tool || $json.tool_request.tool }}",
+                    "rightValue": "CALENDAR_DELETE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "switch-calendar-tool",
+      "name": "Switch Calendar Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -640,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json.next_action.payload.time_min_utc || $json.tool_request.payload.time_min_utc }}",
+          "timeMax": "={{ $json.next_action.payload.time_max_utc || $json.tool_request.payload.time_max_utc }}"
+        }
+      },
+      "id": "calendar-check",
+      "name": "Google Calendar Check",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        -80
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const events = $input.all().map((item) => item.json);\nconst busy = [];\nfor (const event of events) {\n  const start = event?.start?.dateTime || event?.start;\n  if (typeof start === 'string') busy.push(new Date(start).toISOString());\n}\nreturn [{\n  json: {\n    correlation_id: $('Execute Workflow Trigger').first().json.tool_request?.correlation_id || $('Execute Workflow Trigger').first().json.correlation_id,\n    chat_id: $('Execute Workflow Trigger').first().json.next_action?.payload?.chat_id || $('Execute Workflow Trigger').first().json.tool_request?.payload?.chat_id,\n    tool_name: 'CALENDAR_CHECK',\n    tool_output: { success: true, busy_slots_utc: busy }\n  }\n}];"
+      },
+      "id": "build-check-result",
+      "name": "Build CALENDAR_CHECK Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "start": "={{ $json.next_action.payload.start_utc || $json.tool_request.payload.start_utc }}",
+        "end": "={{ $json.next_action.payload.end_utc || $json.tool_request.payload.end_utc }}",
+        "additionalFields": {
+          "summary": "={{ $json.next_action.payload.summary || $json.tool_request.payload.summary }}"
+        }
+      },
+      "id": "calendar-create",
+      "name": "Google Calendar Create",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        40
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const eventId = $json?.id || $json?.eventId || null;\nreturn [{\n  json: {\n    correlation_id: $('Execute Workflow Trigger').first().json.tool_request?.correlation_id || $('Execute Workflow Trigger').first().json.correlation_id,\n    chat_id: $('Execute Workflow Trigger').first().json.next_action?.payload?.chat_id || $('Execute Workflow Trigger').first().json.tool_request?.payload?.chat_id,\n    tool_name: 'CALENDAR_CREATE',\n    tool_output: { success: Boolean(eventId), event_id: eventId, raw: $json }\n  }\n}];"
+      },
+      "id": "build-create-result",
+      "name": "Build CALENDAR_CREATE Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "eventId": "={{ $json.next_action.payload.event_id || $json.tool_request.payload.event_id }}"
+      },
+      "id": "calendar-delete",
+      "name": "Google Calendar Delete",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        160
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return [{\n  json: {\n    correlation_id: $('Execute Workflow Trigger').first().json.tool_request?.correlation_id || $('Execute Workflow Trigger').first().json.correlation_id,\n    chat_id: $('Execute Workflow Trigger').first().json.next_action?.payload?.chat_id || $('Execute Workflow Trigger').first().json.tool_request?.payload?.chat_id,\n    tool_name: 'CALENDAR_DELETE',\n    tool_output: { success: true }\n  }\n}];"
+      },
+      "id": "build-delete-result",
+      "name": "Build CALENDAR_DELETE Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/tools/result' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  correlation_id: $json.correlation_id,\n  tool_name: $json.tool_name,\n  tool_output: $json.tool_output\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "post-tools-result",
+      "name": "POST /v1/tools/result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        80,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "ASK_USER",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "DONE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.next_action.kind }}",
+                    "rightValue": "RUN_TOOL",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      },
+      "id": "switch-result-action",
+      "name": "Switch Result Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        300,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Build CALENDAR_DELETE Result').first().json.chat_id || $('Build CALENDAR_CREATE Result').first().json.chat_id || $('Build CALENDAR_CHECK Result').first().json.chat_id }}",
+        "text": "={{ $json.reply_text || $json.next_action.reply_text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "send-ask-or-done",
+      "name": "Send Tool Follow-up Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        -20
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "wf_tool_executor_sheet",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "execute-sheet-workflow",
+      "name": "Execute wf_tool_executor_sheet",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        540,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const fallback = $('Execute Workflow Trigger').first().json;\nconst correlationId = fallback.tool_request?.correlation_id || fallback.correlation_id || '';\nconst chatId = fallback.next_action?.payload?.chat_id || fallback.tool_request?.payload?.chat_id || '';\nreturn [{\n  json: {\n    correlation_id: correlationId,\n    tool_name: fallback.next_action?.tool || fallback.tool_request?.tool || 'CALENDAR_CHECK',\n    chat_id: chatId,\n    tool_output: { success: false, error: $json.error?.message || 'Calendar node failure' }\n  }\n}];"
+      },
+      "id": "build-error-result",
+      "name": "Build Error Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Switch Calendar Tool",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Calendar Tool": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Calendar Create",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Google Calendar Delete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar Check": {
+      "main": [
+        [
+          {
+            "node": "Build CALENDAR_CHECK Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar Create": {
+      "main": [
+        [
+          {
+            "node": "Build CALENDAR_CREATE Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar Delete": {
+      "main": [
+        [
+          {
+            "node": "Build CALENDAR_DELETE Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CALENDAR_CHECK Result": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/tools/result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CALENDAR_CREATE Result": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/tools/result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CALENDAR_DELETE Result": {
+      "main": [
+        [
+          {
+            "node": "POST /v1/tools/result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /v1/tools/result": {
+      "main": [
+        [
+          {
+            "node": "Switch Result Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Result Action": {
+      "main": [
+        [
+          {
+            "node": "Send Tool Follow-up Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Tool Follow-up Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute wf_tool_executor_sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000002",
+  "tags": []
+}

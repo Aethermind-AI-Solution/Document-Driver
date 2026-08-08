@@ -1,0 +1,226 @@
+{
+  "name": "wf_dead_letter_reprocess",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "dead-letter-reprocess",
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -860,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ Array.isArray($json.body?.message_ids) ? 'yes' : '' }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "if-manual-ids",
+      "name": "If Manual IDs Provided",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const body = $json.body || {};\nconst ids = Array.isArray(body.message_ids) ? body.message_ids : [];\nconst retryCount = Number(body.retry_count || 0);\nreturn ids.map((id) => ({ json: { id: String(id), retry_count: retryCount } }));"
+      },
+      "id": "expand-manual-ids",
+      "name": "Expand Manual IDs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/outbox/failed?limit=100' }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-failed-outbox",
+      "name": "GET /v1/outbox/failed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const rows = Array.isArray($json.items) ? $json.items : [];\nreturn rows.map((row) => ({ json: { id: row.id, retry_count: Number(row.retryCount || 0) } }));"
+      },
+      "id": "expand-failed-items",
+      "name": "Expand Failed Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const retry = Number($json.retry_count || 0) + 1;\nconst nextRetry = new Date(Date.now() + 60000).toISOString();\nreturn [{\n  json: {\n    id: $json.id,\n    status: 'queued',\n    retry_count: retry,\n    next_retry_at: nextRetry,\n    last_error: 'Dead-letter reprocess'\n  }\n}];"
+      },
+      "id": "build-requeue-payload",
+      "name": "Build Requeue Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.BOOKING_CORE_BASE_URL + '/v1/outbox/' + $json.id + '/mark' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ {\n  status: $json.status,\n  retry_count: $json.retry_count,\n  next_retry_at: $json.next_retry_at,\n  last_error: $json.last_error\n} }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "mark-requeued",
+      "name": "Mark Requeued",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, reprocessed: $('Mark Requeued').all().length } }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        540,
+        40
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "If Manual IDs Provided",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Manual IDs Provided": {
+      "main": [
+        [
+          {
+            "node": "Expand Manual IDs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GET /v1/outbox/failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Manual IDs": {
+      "main": [
+        [
+          {
+            "node": "Build Requeue Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /v1/outbox/failed": {
+      "main": [
+        [
+          {
+            "node": "Expand Failed Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Failed Items": {
+      "main": [
+        [
+          {
+            "node": "Build Requeue Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Requeue Payload": {
+      "main": [
+        [
+          {
+            "node": "Mark Requeued",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Requeued": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000005",
+  "tags": []
+}

@@ -1,5 +1,5 @@
-import csv, io, shutil
-from datetime import datetime
+import csv, io, json, shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,8 +22,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _parse_rows(value):
+    """Return a list-of-row-dicts if the field value is a JSON table (line_items),
+    else None."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(parsed, list) and parsed and all(isinstance(r, dict) for r in parsed):
+        return parsed
+    return None
+
+def _to_csv(fields: list[dict]) -> str:
+    """Scalar fields as rows; table fields (line_items) flattened into a labelled
+    section with real columns so ERP/AP consumers get columns, not a JSON blob."""
+    stream = io.StringIO(); writer = csv.writer(stream)
+    writer.writerow(["field", "value", "confidence", "validated"])
+    tables = []
+    for f in fields:
+        rows = _parse_rows(f["field_value"])
+        if rows is not None:
+            writer.writerow([f["field_name"], f"{len(rows)} rows", f["confidence"], f["validated"]])
+            tables.append((f["field_name"], rows))
+        else:
+            writer.writerow([f["field_name"], f["field_value"], f["confidence"], f["validated"]])
+    for name, rows in tables:
+        cols = list(rows[0].keys())
+        writer.writerow([]); writer.writerow([f"# {name}"]); writer.writerow(cols)
+        for r in rows:
+            writer.writerow([r.get(c) for c in cols])
+    return stream.getvalue()
+
 def serialize(d: Document):
-    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details} for a in d.audit_logs]}
+    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details} for a in d.audit_logs]}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
@@ -43,7 +76,7 @@ async def upload(file: UploadFile = File(...), document_type: str = "invoice", d
     except ValueError as exc: raise HTTPException(400, str(exc))
     data = await file.read()
     if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, f"File exceeds the {config.MAX_UPLOAD_MB} MB limit")
-    safe_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
+    safe_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(file.filename).name}"
     destination = config.UPLOAD_DIR / safe_name
     destination.write_bytes(data)
     doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=str(destination))
@@ -92,6 +125,4 @@ def export(document_id: int, format: str = "json", db: Session = Depends(get_db)
     log(db, doc.id, "Exported", format.upper()); db.commit(); data = serialize(doc)
     if format == "json": return data
     if format != "csv": raise HTTPException(400, "format must be csv or json")
-    stream = io.StringIO(); writer = csv.writer(stream); writer.writerow(["field", "value", "confidence", "validated"])
-    for f in data["fields"]: writer.writerow([f["field_name"], f["field_value"], f["confidence"], f["validated"]])
-    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition":f'attachment; filename="document-{doc.id}.csv"'})
+    return StreamingResponse(iter([_to_csv(data["fields"])]), media_type="text/csv", headers={"Content-Disposition":f'attachment; filename="document-{doc.id}.csv"'})

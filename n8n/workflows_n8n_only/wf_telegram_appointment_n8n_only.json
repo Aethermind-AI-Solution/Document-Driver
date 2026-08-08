@@ -1,0 +1,826 @@
+{
+  "name": "wf_telegram_appointment_n8n_only",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1200,
+        0
+      ],
+      "id": "telegram-trigger-main",
+      "name": "Telegram Trigger",
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const store = getWorkflowStaticData('global');\nstore.sessions ??= {};\nstore.processed ??= {};\nstore.deadletter ??= [];\nstore.appointments ??= {};\n\nconst now = Date.now();\nfor (const [k, v] of Object.entries(store.processed)) {\n  if (typeof v === 'number' && now - v > 7 * 24 * 60 * 60 * 1000) delete store.processed[k];\n}\n\nconst message = $json.message || {};\nconst chatId = String(message?.chat?.id || '');\nconst messageId = String(message?.message_id || '');\nconst text = typeof message?.text === 'string' ? message.text.trim() : '';\n\nif (!chatId || !messageId) {\n  return [{ json: { route: 'DROP_DUPLICATE', action: 'NOOP' } }];\n}\n\nconst dedupeKey = `${chatId}:${messageId}`;\nif (store.processed[dedupeKey]) {\n  return [{ json: { route: 'DROP_DUPLICATE', action: 'NOOP', chatId, messageId } }];\n}\nstore.processed[dedupeKey] = now;\n\nconst existing = store.sessions[chatId] || {\n  state: 'NEED_NAME',\n  data: { language: 'en' },\n  updatedAt: new Date().toISOString()\n};\n\nif (!text) {\n  return [{\n    json: {\n      route: 'ASK_NON_TEXT',\n      action: 'ASK_USER',\n      chatId,\n      messageId,\n      session: existing,\n      replyText: 'Please send a text message so I can continue your booking.'\n    }\n  }];\n}\n\nif (/[\\u0900-\\u097F]/.test(text)) {\n  existing.data.language = 'hi';\n}\n\nreturn [{\n  json: {\n    route: 'ADVANCE',\n    action: 'ADVANCE',\n    chatId,\n    messageId,\n    text,\n    session: existing\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -980,
+        0
+      ],
+      "id": "normalize-dedupe",
+      "name": "Normalize + Dedupe"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "ADVANCE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ADVANCE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "ASK_NON_TEXT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ASK_NON_TEXT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "DROP_DUPLICATE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DROP_DUPLICATE"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -760,
+        0
+      ],
+      "id": "route-switch",
+      "name": "Route Switch"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "function pad(n){ return String(n).padStart(2,'0'); }\nfunction istNow(){ return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })); }\nfunction ymdFromDate(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }\nfunction compareYmd(a,b){ if(a===b) return 0; return a>b?1:-1; }\nfunction toAmPm(h,m){ const hh = h % 12 === 0 ? 12 : h % 12; const ampm = h >= 12 ? 'PM' : 'AM'; return `${pad(hh)}:${pad(m)} ${ampm}`; }\nfunction weekday(ymd){ const [y,m,d] = ymd.split('-').map(Number); return new Date(Date.UTC(y,m-1,d)).getUTCDay(); }\nfunction detectPeriod(text){ const t = text.toLowerCase(); if(/morning|subah|am/.test(t)) return 'MORNING'; if(/evening|afternoon|shaam|pm|raat/.test(t)) return 'EVENING'; return null; }\nfunction normalizeMobile(text){ const digits = text.replace(/\\D/g,''); if(digits.length===10) return digits; if(digits.length===12 && digits.startsWith('91')) return digits.slice(2); return null; }\nfunction normalizeName(text){ const cleaned = text.replace(/[^a-zA-Z\\s]/g,' ').trim().replace(/\\s+/g,' '); if(cleaned.length < 2) return null; return cleaned.split(' ').map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(' '); }\nfunction parseDateInput(text){\n const t = text.trim().toLowerCase();\n const now = istNow();\n if(/^tomorrow$|^kal$/.test(t)){ const d = new Date(now); d.setDate(d.getDate()+1); return ymdFromDate(d); }\n if(/^today$|^aaj$/.test(t)){ return ymdFromDate(now); }\n let m = t.match(/^(\\d{1,2})[-\\/](\\d{1,2})(?:[-\\/](\\d{4}))?$/);\n if(m){ const day = Number(m[1]); const mon = Number(m[2]); const yr = m[3]?Number(m[3]):now.getFullYear(); if(day>=1&&day<=31&&mon>=1&&mon<=12) return `${yr}-${pad(mon)}-${pad(day)}`; }\n m = t.match(/^(\\d{1,2})\\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)(?:\\s*(\\d{4}))?$/i);\n if(m){ const months = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12}; const day=Number(m[1]); const mon=months[m[2].toLowerCase()]; const yr=m[3]?Number(m[3]):now.getFullYear(); if(day>=1&&day<=31) return `${yr}-${pad(mon)}-${pad(day)}`; }\n return null;\n}\nfunction generateSlots(ymd, period){\n const day = weekday(ymd);\n const windows = {0:[['18:30','21:30']],1:[['18:30','21:30']],2:[['18:30','21:30']],3:[['18:30','21:30']],4:[['18:30','21:30']],5:[['18:30','21:30']],6:[['10:30','13:00'],['18:30','21:30']]};\n const defs = windows[day] || [];\n const slots = [];\n for(const [start,end] of defs){\n  const [sh,sm] = start.split(':').map(Number);\n  const [eh,em] = end.split(':').map(Number);\n  let curMin = sh*60 + sm;\n  const endMin = eh*60 + em;\n  while(curMin + 10 <= endMin){\n   const h = Math.floor(curMin/60); const m = curMin % 60;\n   const isMorning = h < 12;\n   if((period==='MORNING' && isMorning) || (period==='EVENING' && !isMorning)){\n    const next = curMin + 10;\n    const ehh = Math.floor(next/60); const emm = next%60;\n    const startIso = `${ymd}T${pad(h)}:${pad(m)}:00+05:30`;\n    const endIso = `${ymd}T${pad(ehh)}:${pad(emm)}:00+05:30`;\n    slots.push({ display: toAmPm(h,m), startIso, endIso });\n   }\n   curMin += 10;\n  }\n }\n return slots;\n}\nfunction parseSlot(text){ const m = text.toUpperCase().match(/\\b(1[0-2]|0?[1-9]):([0-5][0-9])\\s*(AM|PM)\\b/); if(!m) return null; const h=String(m[1]).padStart(2,'0'); return `${h}:${m[2]} ${m[3]}`; }\nfunction isYes(text){ return /^(yes|confirm|ok|haan|ha|kar do|confirm karo)$/i.test(text.trim()); }\nfunction isNo(text){ return /^(no|nah|nahi|cancel)$/i.test(text.trim()); }\n\nconst input = $json;\nconst text = String(input.text || '').trim();\nconst chatId = String(input.chatId || '');\nlet session = input.session || { state: 'NEED_NAME', data: { language: 'en' } };\nsession.data ??= {};\nconst lang = session.data.language === 'hi' ? 'hi' : 'en';\nconst ask = (en, hi) => (lang === 'hi' ? hi : en);\n\nif (session.state === 'BOOKED') {\n  const t = text.toLowerCase();\n  if (/(cancel|cancellation|band)/.test(t) && session.data.calendarEventId) {\n    session.data.rescheduleFlow = false;\n    return [{ json: { action: 'DELETE_EVENT', chatId, session, toolPayload: { eventId: session.data.calendarEventId } } }];\n  }\n  if (/(reschedule|change|shift|move)/.test(t) && session.data.calendarEventId) {\n    session.state = 'RESCHEDULE_PENDING';\n    session.data.rescheduleFlow = true;\n    return [{ json: { action: 'DELETE_EVENT', chatId, session, toolPayload: { eventId: session.data.calendarEventId } } }];\n  }\n  const done = ask(\n    `Your appointment is already confirmed for ${session.data.bookingDate || ''} ${session.data.bookingTime || ''}. Reply 'cancel' or 'reschedule' to modify.`,\n    `Aapka appointment ${session.data.bookingDate || ''} ${session.data.bookingTime || ''} ke liye confirm hai. Badalne ke liye 'cancel' ya 'reschedule' likhein.`\n  );\n  return [{ json: { action: 'ASK_USER', chatId, session, replyText: done } }];\n}\n\nswitch (session.state) {\n  case 'NEED_NAME': {\n    const name = normalizeName(text);\n    if (!name) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Could I please get your full name?', 'Kripya apna poora naam batayein.') } }];\n    session.data.patientName = name;\n    session.state = 'NEED_MOBILE';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask(`Thank you, ${name}. Could I please have your 10-digit mobile number?`, `Dhanyavaad ${name}. Kripya apna 10-digit mobile number share karein.`) } }];\n  }\n  case 'NEED_MOBILE': {\n    const mobile = normalizeMobile(text);\n    if (!mobile) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Please share a valid 10-digit mobile number.', 'Kripya valid 10-digit mobile number bhejein.') } }];\n    session.data.mobile = mobile;\n    session.state = 'NEED_DATE';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('What date would you like to visit Dr. Sumit? (DD-MM-YYYY)', 'Aap kis date ko appointment chahte hain? (DD-MM-YYYY)') } }];\n  }\n  case 'NEED_DATE': {\n    const ymd = parseDateInput(text);\n    if (!ymd) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Please share a valid date in DD-MM-YYYY format.', 'Kripya valid date DD-MM-YYYY format mein bhejein.') } }];\n    const today = ymdFromDate(istNow());\n    if (compareYmd(ymd, today) <= 0) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('I apologize, but we do not accept same-day or past bookings. Could I book you for tomorrow or a later date?', 'Same-day ya past date booking allowed nahi hai. Kripya kal ya uske baad ki date batayein.') } }];\n    session.data.requestedDate = ymd;\n    session.state = 'NEED_PERIOD';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Would you prefer a morning or an evening appointment?', 'Kya aap morning slot chahenge ya evening slot?') } }];\n  }\n  case 'NEED_PERIOD': {\n    const period = detectPeriod(text);\n    if (!period) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Please choose morning or evening.', 'Kripya morning ya evening choose karein.') } }];\n    const slots = generateSlots(session.data.requestedDate, period);\n    if (!slots.length) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('No slots available for this preference. Please choose the other half of the day.', 'Is preference mein slot available nahi hai. Kripya doosra time preference batayein.') } }];\n    session.data.period = period;\n    session.data.candidateSlots = slots;\n    return [{ json: { action: 'CHECK_AVAILABILITY', chatId, session, toolPayload: { timeMin: slots[0].startIso, timeMax: slots[slots.length - 1].endIso, candidateSlots: slots } } }];\n  }\n  case 'NEED_SLOT_SELECTION': {\n    const normalized = parseSlot(text);\n    const free = session.data.freeSlots || [];\n    if (!normalized) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Please send a valid slot like 06:40 PM.', 'Kripya valid slot bhejein, jaise 06:40 PM.') } }];\n    const selected = free.find(s => String(s.display).toUpperCase() === normalized);\n    if (!selected) return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask(`Please choose from: ${free.map(s=>s.display).join(', ')}`, `Kripya in mein se choose karein: ${free.map(s=>s.display).join(', ')}`) } }];\n    session.data.selectedSlot = selected;\n    session.state = 'NEED_CONFIRMATION';\n    const summary = `Name: ${session.data.patientName}\\nMobile: ${session.data.mobile}\\nDate: ${session.data.requestedDate}\\nTime: ${selected.display}`;\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: `${summary}\\n${ask('Shall I confirm this for you?', 'Kya main isse confirm kar doon?')}` } }];\n  }\n  case 'NEED_CONFIRMATION': {\n    if (isNo(text)) {\n      session.state = 'NEED_DATE';\n      session.data.requestedDate = undefined;\n      session.data.period = undefined;\n      session.data.candidateSlots = undefined;\n      session.data.freeSlots = undefined;\n      session.data.selectedSlot = undefined;\n      return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('No problem. What new date would you like?', 'Theek hai. Aap kaunsi nayi date chahte hain?') } }];\n    }\n    if (!isYes(text) || !session.data.selectedSlot) {\n      return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask(\"Please type 'yes' to confirm or 'no' to change.\", \"Confirm ke liye 'yes' aur badalne ke liye 'no' likhiye.\") } }];\n    }\n    const sel = session.data.selectedSlot;\n    const idempotencyKey = `${chatId}:${sel.startIso}`;\n    return [{ json: { action: 'CREATE_EVENT', chatId, session, toolPayload: { startIso: sel.startIso, endIso: sel.endIso, summary: `Booking: ${session.data.patientName} - ${session.data.mobile}`, idempotencyKey } } }];\n  }\n  case 'RESCHEDULE_PENDING': {\n    session.state = 'NEED_DATE';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('What new date would you like? (DD-MM-YYYY)', 'Aapko kaunsi nayi date chahiye? (DD-MM-YYYY)') } }];\n  }\n  case 'CANCELLED': {\n    session.state = 'NEED_DATE';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Would you like to book a new appointment date?', 'Kya aap nayi appointment date book karna chahenge?') } }];\n  }\n  default: {\n    session.state = 'NEED_NAME';\n    return [{ json: { action: 'ASK_USER', chatId, session, replyText: ask('Could I please get your full name?', 'Kripya apna poora naam batayein.') } }];\n  }\n}\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        -120
+      ],
+      "id": "state-machine",
+      "name": "State Machine Engine"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "ASK_USER",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ASK_USER"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "CHECK_AVAILABILITY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CHECK_AVAILABILITY"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "CREATE_EVENT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CREATE_EVENT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "DELETE_EVENT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DELETE_EVENT"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        -120
+      ],
+      "id": "action-switch",
+      "name": "Action Switch"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json.toolPayload.timeMin }}",
+          "timeMax": "={{ $json.toolPayload.timeMax }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        -260
+      ],
+      "id": "calendar-check",
+      "name": "Calendar Check",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const ctx = $('State Machine Engine').first().json;\nconst events = $input.all().map(i => i.json);\nconst busy = new Set();\nfor (const e of events) {\n  const dt = e?.start?.dateTime || e?.start;\n  if (typeof dt === 'string') busy.add(new Date(dt).toISOString());\n}\nconst candidates = Array.isArray(ctx?.toolPayload?.candidateSlots) ? ctx.toolPayload.candidateSlots : [];\nconst free = candidates.filter(s => !busy.has(new Date(s.startIso).toISOString())).slice(0,3);\nconst session = ctx.session || { state: 'NEED_PERIOD', data: {} };\nconst lang = session?.data?.language === 'hi' ? 'hi' : 'en';\nconst ask = (en, hi) => (lang === 'hi' ? hi : en);\nlet replyText = '';\nif (!free.length) {\n  session.state = 'NEED_PERIOD';\n  replyText = ask('No slots are available for this preference. Please choose the other half of the day.', 'Is preference mein slot available nahi hai. Kripya doosra time preference batayein.');\n} else {\n  session.state = 'NEED_SLOT_SELECTION';\n  session.data.freeSlots = free;\n  replyText = ask(`Please choose from the following available slots: ${free.map(s => s.display).join(', ')}`, `Kripya in available slots mein se choose karein: ${free.map(s => s.display).join(', ')}`);\n}\nreturn [{ json: { action: 'ASK_USER', chatId: ctx.chatId, session, replyText } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        -260
+      ],
+      "id": "handle-check-result",
+      "name": "Handle Check Result"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "start": "={{ $json.toolPayload.startIso }}",
+        "end": "={{ $json.toolPayload.endIso }}",
+        "additionalFields": {
+          "summary": "={{ $json.toolPayload.summary }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        -80
+      ],
+      "id": "calendar-create",
+      "name": "Create Calendar Event",
+      "continueOnFail": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.error }}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        120,
+        -80
+      ],
+      "id": "if-create-failed",
+      "name": "If Create Failed"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GSHEET_DOCUMENT_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $env.GSHEET_SHEET_NAME || 'Active Bookings' }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Appointment ID": "={{ $('State Machine Engine').first().json.toolPayload.idempotencyKey }}",
+            "Patient Name": "={{ $('State Machine Engine').first().json.session.data.patientName }}",
+            "Mobile Number": "={{ $('State Machine Engine').first().json.session.data.mobile }}",
+            "Appointment Date": "={{ $('State Machine Engine').first().json.session.data.requestedDate }}",
+            "Time Slot": "={{ $('State Machine Engine').first().json.session.data.selectedSlot.display }}",
+            "Status": "Confirmed",
+            "Telegram Chat ID": "={{ $('State Machine Engine').first().json.chatId }}",
+            "Calendar Event ID": "={{ $('Create Calendar Event').first().json.id }}"
+          },
+          "matchingColumns": [
+            "Appointment ID"
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        340,
+        -160
+      ],
+      "id": "sheet-upsert-confirmed",
+      "name": "Sheet Upsert Confirmed",
+      "credentials": {
+        "googleApi": {
+          "id": "__REPLACE_GSHEETS_CREDENTIAL_ID__",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('State Machine Engine').first().json;\nconst session = ctx.session || { state: 'BOOKED', data: {} };\nconst eventId = $('Create Calendar Event').first().json.id;\nsession.state = 'BOOKED';\nsession.data.calendarEventId = eventId;\nsession.data.bookingDate = session.data.requestedDate;\nsession.data.bookingTime = session.data.selectedSlot?.display || '';\nconst chatId = ctx.chatId;\nconst replyText = `✅ Your appointment is confirmed!\\n\\n👤 Patient Name: ${session.data.patientName}\\n📞 Mobile Number: ${session.data.mobile}\\n📅 Booking Date: ${session.data.bookingDate}\\n🕐 Booking Time: ${session.data.bookingTime}\\n\\n📍 Dr. Sumit Homeopathy Clinic\\nShop No. UFF-16A, Ecomart, Supertech Ecovillage 1, Greater Noida`;\nconst store = getWorkflowStaticData('global');\nstore.appointments ??= {};\nstore.appointments[ctx.toolPayload.idempotencyKey] = {\n  chatId,\n  patientName: session.data.patientName,\n  mobile: session.data.mobile,\n  startIso: session.data.selectedSlot?.startIso,\n  endIso: session.data.selectedSlot?.endIso,\n  eventId,\n  reminderSent: false\n};\nreturn [{ json: { action: 'ASK_USER', chatId, session, replyText } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        -160
+      ],
+      "id": "handle-create-success",
+      "name": "Handle Create Success"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('State Machine Engine').first().json;\nconst session = ctx.session || { state: 'NEED_CONFIRMATION', data: {} };\nconst chatId = ctx.chatId;\nconst store = getWorkflowStaticData('global');\nstore.deadletter ??= [];\nstore.deadletter.push({\n  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,\n  type: 'CREATE_EVENT',\n  chatId,\n  payload: ctx.toolPayload,\n  error: $('Create Calendar Event').first().json.error?.message || 'Calendar create failed',\n  createdAt: new Date().toISOString(),\n  status: 'queued'\n});\nconst replyText = 'We are facing a temporary system delay. Your request is queued and we will confirm shortly.';\nreturn [{ json: { action: 'ASK_USER', chatId, session, replyText } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        0
+      ],
+      "id": "handle-create-failure",
+      "name": "Handle Create Failure"
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GCAL_CALENDAR_ID }}"
+        },
+        "eventId": "={{ $json.toolPayload.eventId }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        -100,
+        120
+      ],
+      "id": "calendar-delete",
+      "name": "Delete Calendar Event",
+      "continueOnFail": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__REPLACE_GCAL_CREDENTIAL_ID__",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.error }}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        120,
+        120
+      ],
+      "id": "if-delete-failed",
+      "name": "If Delete Failed"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.GSHEET_DOCUMENT_ID }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $env.GSHEET_SHEET_NAME || 'Active Bookings' }}"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Appointment ID": "={{ $('State Machine Engine').first().json.toolPayload.eventId || ('cancel-' + $('State Machine Engine').first().json.chatId) }}",
+            "Patient Name": "={{ $('State Machine Engine').first().json.session.data.patientName }}",
+            "Mobile Number": "={{ $('State Machine Engine').first().json.session.data.mobile }}",
+            "Appointment Date": "={{ $('State Machine Engine').first().json.session.data.bookingDate || $('State Machine Engine').first().json.session.data.requestedDate }}",
+            "Time Slot": "={{ $('State Machine Engine').first().json.session.data.bookingTime || $('State Machine Engine').first().json.session.data.selectedSlot?.display }}",
+            "Status": "={{ $('State Machine Engine').first().json.session.data.rescheduleFlow ? 'Rescheduled' : 'Cancelled' }}",
+            "Telegram Chat ID": "={{ $('State Machine Engine').first().json.chatId }}",
+            "Calendar Event ID": ""
+          },
+          "matchingColumns": [
+            "Appointment ID"
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        340,
+        40
+      ],
+      "id": "sheet-upsert-cancel",
+      "name": "Sheet Upsert Cancel/Reschedule",
+      "credentials": {
+        "googleApi": {
+          "id": "__REPLACE_GSHEETS_CREDENTIAL_ID__",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('State Machine Engine').first().json;\nconst session = ctx.session || { state: 'CANCELLED', data: {} };\nconst chatId = ctx.chatId;\nlet replyText = '';\nif (session.data.rescheduleFlow) {\n  session.state = 'NEED_DATE';\n  session.data.calendarEventId = undefined;\n  session.data.bookingDate = undefined;\n  session.data.bookingTime = undefined;\n  session.data.selectedSlot = undefined;\n  session.data.freeSlots = undefined;\n  session.data.candidateSlots = undefined;\n  replyText = session.data.language === 'hi' ? 'Appointment reschedule request liya gaya. Kripya nayi date batayein. (DD-MM-YYYY)' : 'Your reschedule request is done. Please share the new date. (DD-MM-YYYY)';\n} else {\n  session.state = 'CANCELLED';\n  session.data.calendarEventId = undefined;\n  replyText = session.data.language === 'hi' ? 'Aapka appointment cancel kar diya gaya hai.' : 'Your appointment has been cancelled.';\n}\nreturn [{ json: { action: 'ASK_USER', chatId, session, replyText } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        40
+      ],
+      "id": "handle-delete-success",
+      "name": "Handle Delete Success"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const ctx = $('State Machine Engine').first().json;\nconst store = getWorkflowStaticData('global');\nstore.deadletter ??= [];\nstore.deadletter.push({\n  id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,\n  type: 'DELETE_EVENT',\n  chatId: ctx.chatId,\n  payload: ctx.toolPayload,\n  error: $('Delete Calendar Event').first().json.error?.message || 'Calendar delete failed',\n  createdAt: new Date().toISOString(),\n  status: 'queued'\n});\nreturn [{ json: { action: 'ASK_USER', chatId: ctx.chatId, session: ctx.session, replyText: 'We are facing a temporary system delay. Your request is queued and we will confirm shortly.' } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        200
+      ],
+      "id": "handle-delete-failure",
+      "name": "Handle Delete Failure"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const store = getWorkflowStaticData('global');\nstore.sessions ??= {};\nconst chatId = String($json.chatId || '');\nif (chatId && $json.session) {\n  $json.session.updatedAt = new Date().toISOString();\n  store.sessions[chatId] = $json.session;\n}\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -20
+      ],
+      "id": "persist-session",
+      "name": "Persist Session"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.replyText }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1000,
+        -20
+      ],
+      "id": "send-telegram",
+      "name": "Send Telegram Reply",
+      "credentials": {
+        "telegramApi": {
+          "id": "__REPLACE_TELEGRAM_CREDENTIAL_ID__",
+          "name": "Telegram account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize + Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + Dedupe": {
+      "main": [
+        [
+          {
+            "node": "Route Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Switch": {
+      "main": [
+        [
+          {
+            "node": "State Machine Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "State Machine Engine": {
+      "main": [
+        [
+          {
+            "node": "Action Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Action Switch": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Calendar Check",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delete Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar Check": {
+      "main": [
+        [
+          {
+            "node": "Handle Check Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Check Result": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "If Create Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Create Failed": {
+      "main": [
+        [
+          {
+            "node": "Handle Create Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheet Upsert Confirmed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheet Upsert Confirmed": {
+      "main": [
+        [
+          {
+            "node": "Handle Create Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Create Success": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Create Failure": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "If Delete Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Delete Failed": {
+      "main": [
+        [
+          {
+            "node": "Handle Delete Failure",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheet Upsert Cancel/Reschedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheet Upsert Cancel/Reschedule": {
+      "main": [
+        [
+          {
+            "node": "Handle Delete Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Delete Success": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Delete Failure": {
+      "main": [
+        [
+          {
+            "node": "Persist Session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Session": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "versionId": "00000000-0000-0000-0000-000000000301",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
