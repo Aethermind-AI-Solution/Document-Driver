@@ -32,9 +32,12 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 - ✅ Real agent panel (live extraction steps + anomaly chips in UI) `M`
 - *Grounding + HITL review already exist — wired into this pipeline.*
 
-### Phase 2b (future)
+### Phase 2b ✅ Shipped (2026-08-09)
+- ✅ **Async processing** (background tasks, frontend polling, startup recovery) `L`
+
+### Phase 2 — Future items
 - Splitter (multi-doc / multi-page) `M`
-- Async processing (queue + workers, or Tasks primitive) `L` — kills the ~10s wait
+- Durable queue (Upstash QStash) `L`
 - Structured logging (foundation for B15) `S`
 
 ## Phase 3 — MCP connectors & integration (connect to the world)
