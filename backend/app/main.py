@@ -12,7 +12,7 @@ from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut
-from .services import available_schemas, log, process_document, resolve_review_action, schema_for
+from .services import available_schemas, log, resolve_review_action, schema_for
 from .storage import get_storage
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
