@@ -11,7 +11,7 @@ describe("pollDocument", () => {
 
   it("throws on timeout while still processing", async () => {
     const fetchDoc = async () => ({ id: 1, status: "processing" });
-    await expect(pollDocument(1, { intervalMs: 1, timeoutMs: 5, fetchDoc })).rejects.toThrow();
+    await expect(pollDocument(1, { intervalMs: 1, timeoutMs: 5, fetchDoc })).rejects.toMatchObject({ status: 0 });
   });
 
   it("TERMINAL lists the three end states", () => {

@@ -1,12 +1,11 @@
-import base64, json, os, re, time, tempfile
+import base64, json, os, re
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
 from .document_schemas import SCHEMAS
 from .auth import hash_password
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
-from . import storage
+from .models import AuditLog, Document, SchemaDefinition, User
 
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
     db.add(AuditLog(document_id=document_id, action=action, details=details,
