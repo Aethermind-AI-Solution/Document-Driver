@@ -188,6 +188,16 @@ No new infrastructure required. The real multi-agent extraction pipeline is live
 
 **Cost note:** Per-document processing now makes one classifier call + one extractor call per page, compared to the old single call. OpenAI usage increases slightly but remains within the fallback-mode estimate. Async queue + workers (Phase 2b) and the multi-document splitter remain future work.
 
+## Phase 2b — Async processing
+
+No new infrastructure, environment variables, or database schema changes required.
+
+- **Async dispatch:** `POST /process` now returns `202 Accepted` immediately; the pipeline runs in a FastAPI background task.
+- **Frontend polling:** The UI polls `GET /document/{id}` to retrieve status and results until a terminal state is reached.
+- **Stuck-job recovery:** On backend startup, any documents stranded in the `processing` state are automatically reset to `error` and become retryable via the Retry button.
+
+**Future work:** Durable queue (Upstash QStash) and structured logging backend remain planned for subsequent phases.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

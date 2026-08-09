@@ -41,3 +41,21 @@ export async function login(email: string, password: string) {
 }
 
 export async function me() { return api("/auth/me"); }
+
+export const TERMINAL = ["processed", "review_required", "error"];
+
+export async function pollDocument(
+  id: number,
+  opts: { intervalMs?: number; timeoutMs?: number; fetchDoc?: (id: number) => Promise<any> } = {},
+) {
+  const interval = opts.intervalMs ?? 2000;
+  const timeout = opts.timeoutMs ?? 180000;
+  const fetchDoc = opts.fetchDoc ?? ((i: number) => api(`/document/${i}`));
+  const start = Date.now();
+  for (;;) {
+    const doc = await fetchDoc(id);
+    if (TERMINAL.includes(doc.status)) return doc;
+    if (Date.now() - start > timeout) throw Object.assign(new Error("timeout"), { status: 0 });
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}

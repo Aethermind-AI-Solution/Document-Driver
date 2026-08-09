@@ -1,7 +1,7 @@
 import csv, io, json, logging, shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from .config import CORS_ORIGINS
 from . import auth, config
 from .security import rate_limit
 from .database import Base, engine, get_db
+from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut
 from .services import available_schemas, log, process_document, resolve_review_action, schema_for
@@ -48,6 +49,7 @@ def _bootstrap():
     db = next(get_db())
     try:
         bootstrap_admin(db)
+        reset_stuck_processing(db)
     finally:
         db.close()
 
@@ -163,13 +165,17 @@ async def upload(file: UploadFile = File(...), document_type: str = "invoice", d
     db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}", actor=user); db.commit(); db.refresh(doc)
     return serialize(doc)
 
-@app.post("/process/{document_id}", dependencies=[Depends(rate_limit)])
-def process(document_id: int, db: Session = Depends(get_db),
-           user: User = Depends(auth.require_role("admin", "reviewer"))):
+@app.post("/process/{document_id}", status_code=202, dependencies=[Depends(rate_limit)])
+def process(document_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db),
+            user: User = Depends(auth.require_role("admin", "reviewer"))):
     doc = db.get(Document, document_id)
-    if not doc: raise HTTPException(404, "Document not found")
-    try: return serialize(process_document(db, doc, actor=user))
-    except Exception as exc: raise HTTPException(500, f"Processing failed: {exc}")
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if doc.status == "processing":
+        raise HTTPException(409, "Document is already processing")
+    doc.status = "processing"; db.commit(); db.refresh(doc)
+    background_tasks.add_task(run_pipeline_task, doc.id, user.id)
+    return serialize(doc)
 
 @app.get("/documents")
 def documents(q: str = "", status: str = "", db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
