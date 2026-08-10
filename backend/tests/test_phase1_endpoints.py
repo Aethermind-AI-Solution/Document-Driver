@@ -105,3 +105,11 @@ def test_patch_user_invalid_role_rejected(client, db_session):
     user = _seed(db_session, email="patchme@x.co", role="reviewer")
     r = client.patch(f"/users/{user.id}", params={"role": "superadmin"})
     assert r.status_code == 400
+
+
+def test_login_is_rate_limited(client, db_session):
+    from app import config
+    last = None
+    for _ in range(config.RATE_LIMIT_MAX + 1):
+        last = client.post("/auth/login", json={"email": "x@x.co", "password": "x"})
+    assert last.status_code == 429

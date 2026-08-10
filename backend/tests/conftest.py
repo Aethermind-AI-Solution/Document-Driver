@@ -41,3 +41,15 @@ def client(db_session):
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(auth.get_current_user, None)
+
+
+from app.security import rate_limiter
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Isolate the shared sliding-window rate limiter between tests (now that
+    /auth/login is rate-limited, cross-test accumulation would cause spurious 429s)."""
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()

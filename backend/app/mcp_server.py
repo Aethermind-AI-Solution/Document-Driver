@@ -1,6 +1,5 @@
 import secrets
 import base64
-import binascii
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,14 +81,14 @@ async def extract_document_impl(db, file_base64: str, filename: str,
         raise ValueError(f"Unsupported file type '{suffix}' (allowed: PDF, PNG, JPEG)")
     try:
         data = base64.b64decode(file_base64, validate=True)
-    except (binascii.Error, ValueError):
+    except ValueError:  # binascii.Error is a ValueError subclass
         raise ValueError("file_base64 is not valid base64")
     hint = "invoice" if document_type == "auto" else document_type
     schema_for(db, hint)  # raises ValueError on unknown type
     key = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(filename).name}"
     storage.get_storage().save(key, data)
     doc = Document(filename=filename, document_type=hint, stored_path=key)
-    db.add(doc); db.commit(); db.refresh(doc)
+    db.add(doc); db.commit()
     await run_pipeline(db, doc, doc.document_type, actor=actor)
     db.refresh(doc)
     return _doc_result(doc)
@@ -138,6 +137,3 @@ def build_mcp() -> FastMCP:
 
     return mcp
 
-
-def mcp_asgi_app():
-    return TokenAuthASGI(build_mcp().streamable_http_app(), config.MCP_API_TOKEN)
