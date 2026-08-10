@@ -4,8 +4,10 @@ import binascii
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
+from mcp.server.fastmcp import FastMCP
 from . import config
 from . import storage
+from .database import SessionLocal
 from .services import available_schemas, schema_for, log
 from .models import Document, ExtractedField
 from .agents.pipeline import run_pipeline
@@ -91,3 +93,51 @@ async def extract_document_impl(db, file_base64: str, filename: str,
     await run_pipeline(db, doc, doc.document_type, actor=actor)
     db.refresh(doc)
     return _doc_result(doc)
+
+
+def build_mcp() -> FastMCP:
+    mcp = FastMCP("Aethermind", stateless_http=True)
+
+    @mcp.tool()
+    def list_document_types() -> list[dict]:
+        """List the document types (schemas) Aethermind can extract."""
+        db = SessionLocal()
+        try:
+            return list_types_impl(db)
+        finally:
+            db.close()
+
+    @mcp.tool()
+    async def extract_document(file_base64: str, filename: str, document_type: str = "auto") -> dict:
+        """Extract structured fields from a base64-encoded document (PDF/PNG/JPEG)."""
+        db = SessionLocal()
+        try:
+            return await extract_document_impl(db, file_base64, filename, document_type,
+                                               build_service_principal())
+        finally:
+            db.close()
+
+    @mcp.tool()
+    def get_document(document_id: int) -> dict:
+        """Fetch a processed document's fields, confidence, grounding, and status."""
+        db = SessionLocal()
+        try:
+            return get_document_impl(db, document_id)
+        finally:
+            db.close()
+
+    @mcp.tool()
+    def submit_correction(document_id: int, field_name: str, value: str) -> dict:
+        """Correct a single extracted field's value (human-in-the-loop)."""
+        db = SessionLocal()
+        try:
+            return submit_correction_impl(db, document_id, field_name, value,
+                                          build_service_principal())
+        finally:
+            db.close()
+
+    return mcp
+
+
+def mcp_asgi_app():
+    return TokenAuthASGI(build_mcp().streamable_http_app(), config.MCP_API_TOKEN)
