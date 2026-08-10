@@ -226,7 +226,7 @@ def mount_mcp(app) -> bool:
     # (it starts/stops a StreamableHTTPSessionManager); without wiring it into
     # the parent app's lifespan, requests that reach the sub-app 500 because the
     # session manager was never started. Verified by direct test: mounting
-    # without this produced a 500 on an authenticated /mcp/mcp/ request, while
+    # without this produced a 500 on an authenticated /mcp/ request, while
     # running mcp_app standalone (its own lifespan triggered) returned 200.
     prev = app.router.lifespan_context
     import contextlib

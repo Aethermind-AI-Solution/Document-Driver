@@ -96,7 +96,7 @@ async def extract_document_impl(db, file_base64: str, filename: str,
 
 
 def build_mcp() -> FastMCP:
-    mcp = FastMCP("Aethermind", stateless_http=True)
+    mcp = FastMCP("Aethermind", stateless_http=True, streamable_http_path="/")
 
     @mcp.tool()
     def list_document_types() -> list[dict]:
