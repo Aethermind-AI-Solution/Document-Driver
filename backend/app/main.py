@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
-from . import auth, config
+from . import auth, config, mcp_server
 from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
@@ -214,3 +214,28 @@ def export(document_id: int, format: str = "json", db: Session = Depends(get_db)
     if format == "json": return data
     if format != "csv": raise HTTPException(400, "format must be csv or json")
     return StreamingResponse(iter([_to_csv(data["fields"])]), media_type="text/csv", headers={"Content-Disposition":f'attachment; filename="document-{doc.id}.csv"'})
+
+def mount_mcp(app) -> bool:
+    """Mount the MCP server at /mcp only when a token is configured."""
+    if not config.MCP_API_TOKEN:
+        return False
+    mcp_app = mcp_server.build_mcp().streamable_http_app()
+    from .mcp_server import TokenAuthASGI
+    app.mount("/mcp", TokenAuthASGI(mcp_app, config.MCP_API_TOKEN))
+    # FastMCP's streamable HTTP session manager runs via the sub-app's lifespan
+    # (it starts/stops a StreamableHTTPSessionManager); without wiring it into
+    # the parent app's lifespan, requests that reach the sub-app 500 because the
+    # session manager was never started. Verified by direct test: mounting
+    # without this produced a 500 on an authenticated /mcp/ request, while
+    # running mcp_app standalone (its own lifespan triggered) returned 200.
+    prev = app.router.lifespan_context
+    import contextlib
+    @contextlib.asynccontextmanager
+    async def _combined(a):
+        async with mcp_app.router.lifespan_context(mcp_app):
+            async with prev(a):
+                yield
+    app.router.lifespan_context = _combined
+    return True
+
+mount_mcp(app)

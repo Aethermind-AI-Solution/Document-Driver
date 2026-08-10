@@ -198,6 +198,26 @@ No new infrastructure, environment variables, or database schema changes require
 
 **Future work:** Durable queue (Upstash QStash) and structured logging backend remain planned for subsequent phases.
 
+## Phase 3 (S1) — MCP server
+
+Aethermind is now exposed as an MCP server, allowing other agents to call extraction and document management tools.
+
+**Setup:** Set a strong `MCP_API_TOKEN` (e.g. 32 random bytes, base64-encoded) to enable the MCP server. Leave it unset/blank to disable.
+
+**Endpoint:** `POST <backend>/mcp` (Streamable HTTP)
+
+**Authentication:** `Authorization: Bearer <MCP_API_TOKEN>`
+
+**Available tools:**
+- `list_document_types` — list configured document types
+- `extract_document` — extract structured data from a document (Base64-encoded file + filename + document type)
+- `get_document` — retrieve a stored document by ID
+- `submit_correction` — submit a human correction to a field
+
+**Service principal:** All MCP calls run under a service principal (not an individual user) stamped with `MCP_SERVICE_ROLE` (default: `reviewer`). Audit logs mark these operations with actor `mcp-service`.
+
+**Dependency note — pinned versions:** `mcp==1.9.4` and `sse-starlette==2.1.3` are pinned exactly. Do not bump them — newer versions pull Starlette 1.x, which is incompatible with the backend's `fastapi==0.115.6`. Attempting to bump will cause the MCP server to fail to mount.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

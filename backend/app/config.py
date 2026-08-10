@@ -41,6 +41,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 CLASSIFIER_MODEL = os.getenv("CLASSIFIER_MODEL", "gpt-4o-mini")
 PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "5"))
 PIPELINE_STAGE_TIMEOUT = int(os.getenv("PIPELINE_STAGE_TIMEOUT", "60"))
+MCP_API_TOKEN = os.getenv("MCP_API_TOKEN", "")          # empty ⇒ MCP server disabled
+MCP_SERVICE_ROLE = os.getenv("MCP_SERVICE_ROLE", "reviewer")
 
 
 def check_production_config():

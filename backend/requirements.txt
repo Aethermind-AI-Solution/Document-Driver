@@ -13,3 +13,5 @@ psycopg[binary]==3.2.3
 alembic==1.14.0
 pyjwt==2.10.1
 argon2-cffi==23.1.0
+mcp==1.9.4
+sse-starlette==2.1.3
