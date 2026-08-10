@@ -92,7 +92,7 @@ def serialize(d: Document):
 @app.get("/health")
 def health(): return {"status":"ok"}
 
-@app.post("/auth/login", response_model=TokenResponse)
+@app.post("/auth/login", response_model=TokenResponse, dependencies=[Depends(rate_limit)])
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter_by(email=payload.email).first()
     if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
@@ -220,8 +220,7 @@ def mount_mcp(app) -> bool:
     if not config.MCP_API_TOKEN:
         return False
     mcp_app = mcp_server.build_mcp().streamable_http_app()
-    from .mcp_server import TokenAuthASGI
-    app.mount("/mcp", TokenAuthASGI(mcp_app, config.MCP_API_TOKEN))
+    app.mount("/mcp", mcp_server.TokenAuthASGI(mcp_app, config.MCP_API_TOKEN))
     # FastMCP's streamable HTTP session manager runs via the sub-app's lifespan
     # (it starts/stops a StreamableHTTPSessionManager); without wiring it into
     # the parent app's lifespan, requests that reach the sub-app 500 because the
