@@ -1,8 +1,14 @@
 import secrets
+import base64
+import binascii
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from pathlib import Path
 from . import config
+from . import storage
 from .services import available_schemas, schema_for, log
 from .models import Document, ExtractedField
+from .agents.pipeline import run_pipeline
 
 
 def build_service_principal() -> SimpleNamespace:
@@ -62,3 +68,26 @@ def submit_correction_impl(db, document_id: int, field_name: str, value: str, ac
     db.commit()
     return {"field_name": field.field_name, "field_value": field.field_value,
             "edited_by_user": field.edited_by_user}
+
+
+_ALLOWED_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg"}
+
+
+async def extract_document_impl(db, file_base64: str, filename: str,
+                                document_type: str, actor) -> dict:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in _ALLOWED_SUFFIXES:
+        raise ValueError(f"Unsupported file type '{suffix}' (allowed: PDF, PNG, JPEG)")
+    try:
+        data = base64.b64decode(file_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("file_base64 is not valid base64")
+    hint = "invoice" if document_type == "auto" else document_type
+    schema_for(db, hint)  # raises ValueError on unknown type
+    key = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(filename).name}"
+    storage.get_storage().save(key, data)
+    doc = Document(filename=filename, document_type=hint, stored_path=key)
+    db.add(doc); db.commit(); db.refresh(doc)
+    await run_pipeline(db, doc, doc.document_type, actor=actor)
+    db.refresh(doc)
+    return _doc_result(doc)
