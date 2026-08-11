@@ -10,8 +10,8 @@ from . import auth, config, mcp_server
 from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
-from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
+from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
 from .services import available_schemas, log, resolve_review_action, schema_for
 from .storage import get_storage
 
@@ -214,6 +214,39 @@ def export(document_id: int, format: str = "json", db: Session = Depends(get_db)
     if format == "json": return data
     if format != "csv": raise HTTPException(400, "format must be csv or json")
     return StreamingResponse(iter([_to_csv(data["fields"])]), media_type="text/csv", headers={"Content-Disposition":f'attachment; filename="document-{doc.id}.csv"'})
+
+def _webhook_out(w: WebhookConfig) -> dict:
+    return {"id": w.id, "document_type": w.document_type, "url": w.url,
+            "active": w.active, "has_secret": bool(w.secret)}
+
+@app.get("/webhooks", response_model=list[WebhookOut])
+def list_webhooks(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    return [_webhook_out(w) for w in db.query(WebhookConfig).order_by(WebhookConfig.document_type).all()]
+
+@app.post("/webhooks", status_code=201, response_model=WebhookOut)
+def create_webhook(payload: WebhookCreate, db: Session = Depends(get_db),
+                   _: User = Depends(auth.require_role("admin"))):
+    if db.query(WebhookConfig).filter_by(document_type=payload.document_type).first():
+        raise HTTPException(409, "A webhook for that document type already exists")
+    w = WebhookConfig(**payload.model_dump()); db.add(w); db.commit(); db.refresh(w)
+    return _webhook_out(w)
+
+@app.patch("/webhooks/{webhook_id}", response_model=WebhookOut)
+def update_webhook(webhook_id: int, payload: WebhookUpdate, db: Session = Depends(get_db),
+                   _: User = Depends(auth.require_role("admin"))):
+    w = db.get(WebhookConfig, webhook_id)
+    if not w: raise HTTPException(404, "Webhook not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(w, k, v)
+    db.commit(); db.refresh(w)
+    return _webhook_out(w)
+
+@app.delete("/webhooks/{webhook_id}", status_code=204)
+def delete_webhook(webhook_id: int, db: Session = Depends(get_db),
+                   _: User = Depends(auth.require_role("admin"))):
+    w = db.get(WebhookConfig, webhook_id)
+    if not w: raise HTTPException(404, "Webhook not found")
+    db.delete(w); db.commit()
 
 def mount_mcp(app) -> bool:
     """Mount the MCP server at /mcp only when a token is configured."""
