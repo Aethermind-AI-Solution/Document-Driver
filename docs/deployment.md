@@ -218,6 +218,20 @@ Aethermind is now exposed as an MCP server, allowing other agents to call extrac
 
 **Dependency note — pinned versions:** `mcp==1.9.4` and `sse-starlette==2.1.3` are pinned exactly. Do not bump them — newer versions pull Starlette 1.x, which is incompatible with the backend's `fastapi==0.115.6`. Attempting to bump will cause the MCP server to fail to mount.
 
+## Phase 3 (S3) — webhook push
+
+Aethermind now pushes finalized results to downstream systems (Zapier/Make/n8n/custom/ERP) when a document is approved.
+
+**Setup:** Admins configure a webhook per document type via the **Webhooks** admin screen or the `/webhooks` API (admin-only CRUD — `GET/POST/PATCH/DELETE`). Feature is inert until an admin adds a config.
+
+**Delivery:** On approve, Aethermind POSTs the structured result JSON to the configured URL as a background task — single attempt, 10s timeout, never blocks the approve response. When a signing secret is set, the body is HMAC-SHA256-signed via the `X-Aethermind-Signature: sha256=<hex>` header; unsigned when no secret is configured. The outcome ("Webhook delivered" or "Webhook failed: …") is written to the audit log.
+
+**Database migration:** Migration `0004` adds `webhook_configs` and runs automatically via the existing `alembic upgrade head` on every deploy. No manual action needed.
+
+**Dependency note — pinned version:** `requests==2.34.2` is pinned exactly. Do not bump it.
+
+**No new environment variables** — webhook configuration lives in the database, managed via the admin UI/API.
+
 ## Phase 4 — Learning loop
 
 Aethermind now adapts to feedback over time by learning from human corrections.
