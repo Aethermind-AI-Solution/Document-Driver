@@ -50,3 +50,21 @@ class UserCreate(BaseModel):
     role: Literal["admin", "reviewer", "viewer"] = "reviewer"
 
 TokenResponse.model_rebuild()
+
+class WebhookCreate(BaseModel):
+    document_type: str
+    url: str
+    secret: str | None = None
+    active: bool = True
+
+class WebhookUpdate(BaseModel):
+    url: str | None = None
+    secret: str | None = None
+    active: bool | None = None
+
+class WebhookOut(BaseModel):
+    id: int
+    document_type: str
+    url: str
+    active: bool
+    has_secret: bool
