@@ -218,6 +218,22 @@ Aethermind is now exposed as an MCP server, allowing other agents to call extrac
 
 **Dependency note — pinned versions:** `mcp==1.9.4` and `sse-starlette==2.1.3` are pinned exactly. Do not bump them — newer versions pull Starlette 1.x, which is incompatible with the backend's `fastapi==0.115.6`. Attempting to bump will cause the MCP server to fail to mount.
 
+## Phase 4 — Learning loop
+
+Aethermind now adapts to feedback over time by learning from human corrections.
+
+- **How it works:** When extraction runs, the system consults all human corrections made on **approved** documents of the same document type and injects them as few-shot hints into the extractor prompt.
+- **Bounded:** Hints are capped per field (`LEARNING_MAX_HINTS_PER_FIELD`) and globally (`LEARNING_MAX_HINTS`) to keep prompt size manageable.
+- **Toggle:** Set `LEARNING_ENABLED=true` (default in `.env.example`) to turn the feature on; set to `false` to disable.
+- **Cold start:** No effect until documents have been corrected AND approved; with no corrections yet, the system behaves as before.
+- **Visibility:** The Extractor trace shows the hint count for each extraction.
+- **No infrastructure change:** No new dependencies or database schema changes required.
+
+**Environment variables** (in `.env.example`):
+- `LEARNING_ENABLED` — toggle learning on/off (default: `true`)
+- `LEARNING_MAX_HINTS_PER_FIELD` — max hints per field (default: `3`)
+- `LEARNING_MAX_HINTS` — global hint cap across all fields (default: `20`)
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

@@ -54,8 +54,8 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 
 ## Phase 4 — Adaptivity & learning (the moat)
 *Goal: adapt to any document and get better over time. Needs Q2 + real pipeline.*
+- ✅ **B14** Learning loop from reviewer corrections (learns from human corrections on approved documents, injects hints into extraction)
 - **F4** Dynamic / AI-suggested schemas (Schema-Author agent) `L` — the real "fields aren't hardcoded" fix
-- **B14** Learning loop from reviewer corrections `L`
 - **B4+** Deeper confidence — logprobs / self-consistency / bounding boxes `M–L`
 
 ## Phase 5 — Straight-through processing & review lifecycle
