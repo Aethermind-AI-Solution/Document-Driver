@@ -14,6 +14,7 @@ from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, 
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
 from .services import available_schemas, log, resolve_review_action, schema_for
 from .storage import get_storage
+from .webhooks import deliver_webhook
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
 config.check_production_config()
@@ -191,7 +192,8 @@ def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(
     return serialize(doc)
 
 @app.put("/document/{document_id}")
-def update_document(document_id: int, payload: DocumentUpdate, db: Session = Depends(get_db),
+def update_document(document_id: int, payload: DocumentUpdate, background_tasks: BackgroundTasks,
+                    db: Session = Depends(get_db),
                     user: User = Depends(auth.require_role("admin", "reviewer"))):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
@@ -204,7 +206,12 @@ def update_document(document_id: int, payload: DocumentUpdate, db: Session = Dep
     if outcome["status"] is not None: doc.status = outcome["status"]
     if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
     log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
-    db.commit(); db.refresh(doc); return serialize(doc)
+    db.commit(); db.refresh(doc)
+    if outcome["status"] == "approved":
+        cfg = db.query(WebhookConfig).filter_by(document_type=doc.document_type, active=True).first()
+        if cfg:
+            background_tasks.add_task(deliver_webhook, cfg.id, doc.id, user.email)
+    return serialize(doc)
 
 @app.get("/export/{document_id}")
 def export(document_id: int, format: str = "json", db: Session = Depends(get_db), user: User = Depends(auth.get_current_user)):

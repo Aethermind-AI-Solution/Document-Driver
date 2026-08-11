@@ -142,3 +142,41 @@ def test_deliver_inactive_config_no_post(db_session, monkeypatch):
                         lambda *a, **k: posted.__setitem__("v", True) or type("R", (), {"status_code": 200})())
     webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
     assert posted["v"] is False
+
+
+import app.main as main_mod
+from app.models import Document as _Doc, WebhookConfig as _WC
+
+
+def _approve(client, doc_id):
+    return client.put(f"/document/{doc_id}", json={"fields": [], "action": "approve"})
+
+
+def test_approve_with_active_config_schedules_delivery(client, db_session, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_mod, "deliver_webhook",
+                        lambda config_id, document_id, approved_by: calls.append((config_id, document_id)))
+    doc = _Doc(filename="a.pdf", document_type="invoice", stored_path="a", status="review_required")
+    cfg = _WC(document_type="invoice", url="https://h/x", active=True)
+    db_session.add_all([doc, cfg]); db_session.commit(); db_session.refresh(doc); db_session.refresh(cfg)
+    assert _approve(client, doc.id).status_code == 200
+    assert calls == [(cfg.id, doc.id)]
+
+
+def test_approve_without_config_no_delivery(client, db_session, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_mod, "deliver_webhook", lambda *a, **k: calls.append(a))
+    doc = _Doc(filename="a.pdf", document_type="invoice", stored_path="a", status="review_required")
+    db_session.add(doc); db_session.commit(); db_session.refresh(doc)
+    _approve(client, doc.id)
+    assert calls == []
+
+
+def test_save_action_no_delivery(client, db_session, monkeypatch):
+    calls = []
+    monkeypatch.setattr(main_mod, "deliver_webhook", lambda *a, **k: calls.append(a))
+    doc = _Doc(filename="a.pdf", document_type="invoice", stored_path="a", status="review_required")
+    cfg = _WC(document_type="invoice", url="https://h/x", active=True)
+    db_session.add_all([doc, cfg]); db_session.commit(); db_session.refresh(doc)
+    client.put(f"/document/{doc.id}", json={"fields": [], "action": "save"})
+    assert calls == []
