@@ -19,7 +19,7 @@ def _ctx(db):
 
 def test_extractor_fans_out_over_pages(db_session, monkeypatch):
     calls = []
-    def fake(text, fields, path):
+    def fake(text, fields, path, hints=None):
         calls.append(text)
         return [{"field_name": "total", "field_value": "1", "source_quote": None,
                  "grounded": "grounded", "confidence": 0.95}]
@@ -31,7 +31,7 @@ def test_extractor_fans_out_over_pages(db_session, monkeypatch):
 
 
 def test_extractor_page_error_yields_absent(db_session, monkeypatch):
-    def flaky(text, fields, path):
+    def flaky(text, fields, path, hints=None):
         if "page 1" in text:
             raise RuntimeError("boom")
         return [{"field_name": "total", "field_value": "1", "source_quote": None,

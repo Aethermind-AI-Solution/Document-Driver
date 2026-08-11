@@ -25,6 +25,7 @@ class PipelineContext:
     anomalies: list = field(default_factory=list)
     trace: list = field(default_factory=list)
     actor: Any = None
+    hints: dict = field(default_factory=dict)
 
 
 class Agent(Protocol):

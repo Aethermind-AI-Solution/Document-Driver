@@ -3,9 +3,10 @@ from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
+from . import config
 from .document_schemas import SCHEMAS
 from .auth import hash_password
-from .models import AuditLog, Document, SchemaDefinition, User
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
     db.add(AuditLog(document_id=document_id, action=action, details=details,
@@ -37,6 +38,17 @@ def schema_for(db: Session, key: str):
     schema = db.query(SchemaDefinition).filter_by(key=key).first()
     if not schema: raise ValueError(f"Unknown schema '{key}'")
     return {"name": schema.name, "fields": schema.fields}
+
+def _hint_block(hints: dict) -> str:
+    if not hints:
+        return ""
+    lines = ["Human reviewers have previously corrected extractions for this document type. Learn the pattern:"]
+    for name, pairs in hints.items():
+        for original, corrected in pairs:
+            lines.append(f'- {name}: model extracted "{original}" → correct value was "{corrected}"')
+    lines.append("Apply the same judgment, but ALWAYS extract the value that THIS document actually contains — "
+                 "never copy a past value that is not present in this document.")
+    return "\n".join(lines)
 
 def _clean_text(s):
     # PyMuPDF decodes the ₹ glyph as "I"; strip a ₹ or a word-boundary "I" that sits
@@ -145,7 +157,7 @@ def _gemini_prop(f):
     return types.Schema(type=types.Type.OBJECT, properties={"value": value, "quote": quote})
 
 
-def openai_extract(text: str, fields: list[dict], source_path: str):
+def openai_extract(text: str, fields: list[dict], source_path: str, hints: dict | None = None):
     try:
         from openai import OpenAI
         client = OpenAI()
@@ -158,6 +170,8 @@ def openai_extract(text: str, fields: list[dict], source_path: str):
         else:
             content.append({"type":"input_file", "filename":path.name, "file_data":f"data:application/pdf;base64,{encoded}"})
         if text: content.append({"type":"input_text", "text": "Extracted text for reference:\n" + text[:50000]})
+        block = _hint_block(hints or {})
+        if block: content.append({"type": "input_text", "text": block})
         response = client.responses.create(model=OPENAI_MODEL, input=[{"role":"user","content":content}], text={"format":{"type":"json_schema","name":"document_extraction","strict":True,"schema":{"type":"object","properties":properties,"required":[f["name"] for f in fields],"additionalProperties":False}}})
         return _ground_fields(json.loads(response.output_text), fields, text)
     except Exception as exc:
@@ -165,7 +179,7 @@ def openai_extract(text: str, fields: list[dict], source_path: str):
         print(f"[openai_extract] falling back to regex — OpenAI error: {exc!r}", file=sys.stderr, flush=True)
         return fallback_extract(text, fields)
 
-def gemini_extract(text: str, fields: list[dict], source_path: str):
+def gemini_extract(text: str, fields: list[dict], source_path: str, hints: dict | None = None):
     try:
         from google import genai
         from google.genai import types
@@ -178,6 +192,8 @@ def gemini_extract(text: str, fields: list[dict], source_path: str):
                     types.Part.from_bytes(data=path.read_bytes(), mime_type=mime)]
         if text:
             contents.append("Extracted text for reference:\n" + text[:50000])
+        block = _hint_block(hints or {})
+        if block: contents.append(block)
         response = client.models.generate_content(
             model=GEMINI_MODEL, contents=contents,
             config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema))
@@ -187,11 +203,11 @@ def gemini_extract(text: str, fields: list[dict], source_path: str):
         print(f"[gemini_extract] falling back to regex — Gemini error: {exc!r}", file=sys.stderr, flush=True)
         return fallback_extract(text, fields)
 
-def ai_extract(text: str, fields: list[dict], source_path: str):
+def ai_extract(text: str, fields: list[dict], source_path: str, hints: dict | None = None):
     if os.getenv("GEMINI_API_KEY"):
-        return gemini_extract(text, fields, source_path)
+        return gemini_extract(text, fields, source_path, hints)
     if os.getenv("OPENAI_API_KEY"):
-        return openai_extract(text, fields, source_path)
+        return openai_extract(text, fields, source_path, hints)
     return fallback_extract(text, fields)
 
 def process_document(db: Session, document: Document, actor=None) -> Document:
@@ -212,3 +228,56 @@ def bootstrap_admin(db: Session) -> None:
     if db.query(User).count() > 0:
         return
     create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")
+
+def get_correction_hints(db: Session, document_type: str, fields: list[dict]) -> dict:
+    """Recent human corrections on APPROVED docs of this type →
+    {field_name: [(original_value, corrected_value), ...]}. Bounded, deduped;
+    {} on cold-start or any error (never breaks extraction)."""
+    try:
+        names = {f["name"] for f in fields}
+        rows = (db.query(ExtractedField.field_name, ExtractedField.original_value, ExtractedField.field_value)
+                .join(Document, ExtractedField.document_id == Document.id)
+                .filter(Document.document_type == document_type,
+                        Document.status == "approved",
+                        ExtractedField.edited_by_user.is_(True),
+                        ExtractedField.original_value.isnot(None),
+                        ExtractedField.field_value.isnot(None),
+                        ExtractedField.original_value != ExtractedField.field_value)
+                .order_by(Document.upload_date.desc(), ExtractedField.id.desc())
+                .all())
+        # Group rows by field name, preserving order from query
+        rows_by_field = {}
+        for name, original, corrected in rows:
+            if name in names:
+                if name not in rows_by_field:
+                    rows_by_field[name] = []
+                rows_by_field[name].append((original, corrected))
+
+        hints: dict = {}
+        seen: set = set()
+        total = 0
+        # Iterate through fields in order, respecting caps
+        for f in fields:
+            name = f["name"]
+            if name not in rows_by_field:
+                continue
+            for original, corrected in rows_by_field[name]:
+                if total >= config.LEARNING_MAX_HINTS:
+                    break
+                key = (name, original, corrected)
+                if key in seen:
+                    continue
+                if name not in hints:
+                    hints[name] = []
+                if len(hints[name]) >= config.LEARNING_MAX_HINTS_PER_FIELD:
+                    continue
+                hints[name].append((original, corrected))
+                seen.add(key)
+                total += 1
+            if total >= config.LEARNING_MAX_HINTS:
+                break
+        return hints
+    except Exception as exc:
+        import sys
+        print(f"[get_correction_hints] skipping hints — error: {exc!r}", file=sys.stderr, flush=True)
+        return {}

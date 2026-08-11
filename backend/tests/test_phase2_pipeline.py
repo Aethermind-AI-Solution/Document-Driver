@@ -10,7 +10,7 @@ def test_run_pipeline_end_to_end(db_session, monkeypatch):
     async def fake_classify(text, keys):
         return ("invoice", 0.99)
     monkeypatch.setattr(classifier, "classify_document", fake_classify)
-    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
+    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path, hints=None: [
         {"field_name": f["name"], "field_value": ("100" if f["name"] == "total" else None),
          "source_quote": None, "grounded": ("grounded" if f["name"] == "total" else "absent"),
          "confidence": (0.95 if f["name"] == "total" else 0.55)} for f in fields])
@@ -35,7 +35,7 @@ def test_run_pipeline_stage_error_propagates_and_marks_document_error(db_session
     async def fake_classify(text, keys):
         return ("invoice", 0.99)
     monkeypatch.setattr(classifier, "classify_document", fake_classify)
-    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
+    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path, hints=None: [
         {"field_name": f["name"], "field_value": ("100" if f["name"] == "total" else None),
          "source_quote": None, "grounded": ("grounded" if f["name"] == "total" else "absent"),
          "confidence": (0.95 if f["name"] == "total" else 0.55)} for f in fields])
