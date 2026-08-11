@@ -13,7 +13,7 @@ def test_process_captures_original_value(db_session, monkeypatch):
         return ("invoice", 0.99)
     monkeypatch.setattr(agent_classifier, "classify_document", fake_classify)
     monkeypatch.setattr(services, "extract_text", lambda path: "Total 500")
-    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path: [
+    monkeypatch.setattr(services, "ai_extract", lambda text, fields, path, hints=None: [
         {"field_name": "total", "field_value": "500", "source_quote": None,
          "grounded": "grounded", "confidence": 0.95},
     ])
