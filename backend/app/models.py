@@ -60,3 +60,12 @@ class SchemaDefinition(Base):
     key: Mapped[str] = mapped_column(String(80), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     fields: Mapped[list] = mapped_column(JSON)
+
+class WebhookConfig(Base):
+    __tablename__ = "webhook_configs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_type: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    url: Mapped[str] = mapped_column(Text)
+    secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

@@ -46,11 +46,13 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 ### Phase 3 (S1) ✅ Shipped (2026-08-10)
 - ✅ **Aethermind as an MCP *server*** — expose `list_document_types`, `extract_document`, `get_document`, `submit_correction` as tools `M` *(strategic: others' agents call us)*
 
+### Phase 3 (S3) ✅ Shipped (2026-08-11)
+- ✅ **Webhook push on approve** (part of **B10**) — on approve, POST the structured result to a per-document-type webhook, admin-configured via the Webhooks screen/API, with optional HMAC signing and async single-attempt delivery `M`
+
 ### Phase 3 — Future items
 - **S2** **MCP-client ingestion spike** — pull a doc from Google Drive / Gmail via its MCP server into `/upload` `M` *(smallest slice — start here)*
-- **S3** Email-inbox ingestion (part of **B10**) `M`
-- **S4** ERP / accounting / webhook push (part of **B10**) `L`
-- **S5** Enrichment connectors (vendor/GSTIN validation, web search) `M`
+- **S4** Enrichment connectors (vendor/GSTIN validation, web search; ERP-specific adapters remain future) `M`
+- **S5** Email-inbox ingestion (part of **B10**) `M`
 
 ## Phase 4 — Adaptivity & learning (the moat)
 *Goal: adapt to any document and get better over time. Needs Q2 + real pipeline.*
