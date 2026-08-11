@@ -49,3 +49,5 @@ def deliver_webhook(config_id: int, document_id: int, approved_by: str) -> None:
         db.commit()
     except Exception:
         _log.exception("deliver_webhook error for config %s / doc %s", config_id, document_id)
+    finally:
+        db.close()
