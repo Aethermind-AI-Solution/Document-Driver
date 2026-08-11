@@ -58,3 +58,83 @@ def test_non_admin_forbidden(client, db_session):
         assert client.post("/webhooks", json={"document_type": "x", "url": "https://h"}).status_code == 403
     finally:
         app.dependency_overrides.pop(auth.get_current_user, None)
+
+
+import hmac
+import json as _json
+from hashlib import sha256
+from app import webhooks
+from app.models import Document, ExtractedField, AuditLog
+
+
+def test_sign_matches_hmac():
+    body = b'{"a":1}'
+    assert webhooks.sign(body, "k") == "sha256=" + hmac.new(b"k", body, sha256).hexdigest()
+
+
+def test_build_payload_shape(db_session):
+    doc = Document(filename="a.pdf", document_type="invoice", stored_path="a",
+                   status="approved", confidence=0.9)
+    db_session.add(doc); db_session.flush()
+    db_session.add(ExtractedField(document_id=doc.id, field_name="total", field_value="100",
+                                  original_value="100", confidence=0.95, grounded="grounded"))
+    db_session.commit(); db_session.refresh(doc)
+    p = webhooks.build_payload(doc, "you@x.co")
+    assert p["event"] == "document.approved" and p["approved_by"] == "you@x.co"
+    assert p["fields"][0]["field_value"] == "100"
+
+
+def _seed_config_and_doc(db, secret=None, active=True):
+    from app.models import WebhookConfig
+    cfg = WebhookConfig(document_type="invoice", url="https://hook/x", secret=secret, active=active)
+    doc = Document(filename="a.pdf", document_type="invoice", stored_path="a", status="approved")
+    db.add_all([cfg, doc]); db.commit(); db.refresh(cfg); db.refresh(doc)
+    return cfg, doc
+
+
+def test_deliver_posts_signed_and_audits_success(db_session, monkeypatch):
+    cfg, doc = _seed_config_and_doc(db_session, secret="s3cr3t")
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        captured.update(url=url, data=data, headers=headers)
+        return FakeResp()
+
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks.requests, "post", fake_post)
+    webhooks.deliver_webhook(cfg.id, doc.id, "you@x.co")
+    assert captured["url"] == "https://hook/x"
+    assert captured["headers"]["X-Aethermind-Signature"] == webhooks.sign(captured["data"], "s3cr3t")
+    assert db_session.query(AuditLog).filter_by(document_id=doc.id, action="Webhook delivered").count() == 1
+
+
+def test_deliver_no_secret_no_signature(db_session, monkeypatch):
+    cfg, doc = _seed_config_and_doc(db_session, secret=None)
+    captured = {}
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks.requests, "post",
+                        lambda url, data=None, headers=None, timeout=None: captured.update(headers=headers) or type("R", (), {"status_code": 200})())
+    webhooks.deliver_webhook(cfg.id, doc.id, "you@x.co")
+    assert "X-Aethermind-Signature" not in captured["headers"]
+
+
+def test_deliver_failure_audits_and_never_raises(db_session, monkeypatch):
+    cfg, doc = _seed_config_and_doc(db_session)
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    def boom(*a, **k): raise RuntimeError("conn refused")
+    monkeypatch.setattr(webhooks.requests, "post", boom)
+    webhooks.deliver_webhook(cfg.id, doc.id, "you@x.co")   # must not raise
+    assert db_session.query(AuditLog).filter_by(document_id=doc.id, action="Webhook failed").count() == 1
+
+
+def test_deliver_inactive_config_no_post(db_session, monkeypatch):
+    cfg, doc = _seed_config_and_doc(db_session, active=False)
+    posted = {"v": False}
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks.requests, "post",
+                        lambda *a, **k: posted.__setitem__("v", True) or type("R", (), {"status_code": 200})())
+    webhooks.deliver_webhook(cfg.id, doc.id, "you@x.co")
+    assert posted["v"] is False
