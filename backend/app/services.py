@@ -3,9 +3,10 @@ from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
 from .config import GEMINI_MODEL, OPENAI_MODEL
+from . import config
 from .document_schemas import SCHEMAS
 from .auth import hash_password
-from .models import AuditLog, Document, SchemaDefinition, User
+from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
     db.add(AuditLog(document_id=document_id, action=action, details=details,
@@ -212,3 +213,56 @@ def bootstrap_admin(db: Session) -> None:
     if db.query(User).count() > 0:
         return
     create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")
+
+def get_correction_hints(db: Session, document_type: str, fields: list[dict]) -> dict:
+    """Recent human corrections on APPROVED docs of this type →
+    {field_name: [(original_value, corrected_value), ...]}. Bounded, deduped;
+    {} on cold-start or any error (never breaks extraction)."""
+    try:
+        names = {f["name"] for f in fields}
+        rows = (db.query(ExtractedField.field_name, ExtractedField.original_value, ExtractedField.field_value)
+                .join(Document, ExtractedField.document_id == Document.id)
+                .filter(Document.document_type == document_type,
+                        Document.status == "approved",
+                        ExtractedField.edited_by_user.is_(True),
+                        ExtractedField.original_value.isnot(None),
+                        ExtractedField.field_value.isnot(None),
+                        ExtractedField.original_value != ExtractedField.field_value)
+                .order_by(Document.upload_date.desc(), ExtractedField.id.desc())
+                .all())
+        # Group rows by field name, preserving order from query
+        rows_by_field = {}
+        for name, original, corrected in rows:
+            if name in names:
+                if name not in rows_by_field:
+                    rows_by_field[name] = []
+                rows_by_field[name].append((original, corrected))
+
+        hints: dict = {}
+        seen: set = set()
+        total = 0
+        # Iterate through fields in order, respecting caps
+        for f in fields:
+            name = f["name"]
+            if name not in rows_by_field:
+                continue
+            for original, corrected in rows_by_field[name]:
+                if total >= config.LEARNING_MAX_HINTS:
+                    break
+                key = (name, original, corrected)
+                if key in seen:
+                    continue
+                if name not in hints:
+                    hints[name] = []
+                if len(hints[name]) >= config.LEARNING_MAX_HINTS_PER_FIELD:
+                    continue
+                hints[name].append((original, corrected))
+                seen.add(key)
+                total += 1
+            if total >= config.LEARNING_MAX_HINTS:
+                break
+        return hints
+    except Exception as exc:
+        import sys
+        print(f"[get_correction_hints] skipping hints — error: {exc!r}", file=sys.stderr, flush=True)
+        return {}

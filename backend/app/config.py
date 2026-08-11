@@ -43,6 +43,9 @@ PIPELINE_CONCURRENCY = int(os.getenv("PIPELINE_CONCURRENCY", "5"))
 PIPELINE_STAGE_TIMEOUT = int(os.getenv("PIPELINE_STAGE_TIMEOUT", "60"))
 MCP_API_TOKEN = os.getenv("MCP_API_TOKEN", "")          # empty ⇒ MCP server disabled
 MCP_SERVICE_ROLE = os.getenv("MCP_SERVICE_ROLE", "reviewer")
+LEARNING_ENABLED = os.getenv("LEARNING_ENABLED", "true").lower() in ("1", "true", "yes")
+LEARNING_MAX_HINTS_PER_FIELD = int(os.getenv("LEARNING_MAX_HINTS_PER_FIELD", "3"))
+LEARNING_MAX_HINTS = int(os.getenv("LEARNING_MAX_HINTS", "20"))
 
 
 def check_production_config():
