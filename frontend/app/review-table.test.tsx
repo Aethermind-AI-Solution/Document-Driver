@@ -18,7 +18,8 @@ vi.mock("../lib/api", () => ({
   me: vi.fn(async () => ({ id: 1, email: "a@b.co", role: "admin", is_active: true })),
   api: vi.fn(async (path: string) => {
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
-    if (path === "/documents") return [doc];
+    if (path.startsWith("/documents/stats")) return { total: 1, review_required: 0, avg_processing_time: 1.2 };
+    if (path.startsWith("/documents")) return { items: [doc], total: 1 };
     if (path.startsWith("/document/")) return doc;
     return {};
   }),
@@ -43,7 +44,7 @@ describe("line-items table", () => {
         field_value: JSON.stringify([{ description: "Scanner", amount: "37,000" }, null, { description: "Printer", amount: "24,000" }]) }], audit: [] };
     // re-point the mocked api at d2 for this render
     const api = (await import("../lib/api")).api as any;
-    api.mockImplementation(async (p: string) => p === "/schemas" ? [{ key: "invoice", name: "Invoice", fields: [] }] : p === "/documents" ? [d2] : p.startsWith("/document/") ? d2 : {});
+    api.mockImplementation(async (p: string) => p === "/schemas" ? [{ key: "invoice", name: "Invoice", fields: [] }] : p.startsWith("/documents/stats") ? { total: 1, review_required: 0, avg_processing_time: 1.2 } : p.startsWith("/documents") ? { items: [d2], total: 1 } : p.startsWith("/document/") ? d2 : {});
     render(<Home />);
     fireEvent.click(await screen.findByText("n.pdf"));
     expect(await screen.findByText("Scanner")).toBeTruthy();

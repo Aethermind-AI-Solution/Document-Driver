@@ -2,11 +2,13 @@
 import { useEffect, useState } from "react";
 import { api, me } from "../../lib/api";
 import type { User } from "../../lib/auth";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [form, setForm] = useState({ email: "", password: "", role: "reviewer" });
   const [authorized, setAuthorized] = useState(false);
+  const [pendingUser, setPendingUser] = useState<User | null>(null);
   const load = () => api("/users").then(setUsers).catch(() => (window.location.href = "/login"));
   useEffect(() => {
     me()
@@ -47,13 +49,17 @@ export default function UsersPage() {
           <li key={u.id} className="flex items-center justify-between border-b border-slate-100 py-2 text-sm">
             <span>{u.email} — {u.role}{u.is_active ? "" : " (inactive)"}</span>
             {u.is_active && (
-              <button onClick={() => deactivate(u.id)} className="text-xs font-semibold text-rose-600 hover:underline">
+              <button onClick={() => setPendingUser(u)} className="text-xs font-semibold text-rose-600 hover:underline">
                 Deactivate
               </button>
             )}
           </li>
         ))}
       </ul>
+      <ConfirmDialog open={!!pendingUser} destructive title="Deactivate user?"
+        message={pendingUser?`Deactivate ${pendingUser.email}? They will lose access.`:""}
+        confirmLabel="Deactivate" onCancel={()=>setPendingUser(null)}
+        onConfirm={()=>{const u=pendingUser;setPendingUser(null);if(u)deactivate(u.id);}} />
     </div>
   );
 }

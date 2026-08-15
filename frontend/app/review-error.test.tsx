@@ -24,7 +24,8 @@ vi.mock("../lib/api", () => ({
   api: vi.fn(async (path: string, init?: any) => {
     const method = init?.method || "GET";
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
-    if (path === "/documents") return [{ ...processedDoc }];
+    if (path.startsWith("/documents/stats")) return { total: 1, review_required: 0, avg_processing_time: 1.2 };
+    if (path.startsWith("/documents")) return { items: [{ ...processedDoc }], total: 1 };
     if (path.startsWith("/document/") && method === "GET") return { ...processedDoc };
     if (path.startsWith("/document/") && method === "PUT") throw new Error("Processing failed: boom");
     return {};

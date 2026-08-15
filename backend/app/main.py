@@ -90,6 +90,12 @@ def _to_csv(fields: list[dict]) -> str:
 def serialize(d: Document):
     return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"pipeline_trace":d.pipeline_trace,"anomalies":d.anomalies,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details,"actor_email":a.actor_email} for a in d.audit_logs]}
 
+def serialize_summary(d: Document):
+    return {"id": d.id, "filename": d.filename, "document_type": d.document_type,
+            "upload_date": d.upload_date, "status": d.status, "confidence": d.confidence,
+            "review_required": d.review_required, "processing_time": d.processing_time,
+            "anomalies": d.anomalies}
+
 @app.get("/health")
 def health(): return {"status":"ok"}
 
@@ -216,11 +222,25 @@ def process(document_id: int, background_tasks: BackgroundTasks, db: Session = D
     return serialize(doc)
 
 @app.get("/documents")
-def documents(q: str = "", status: str = "", db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
+def documents(q: str = "", status: str = "", limit: int = 20, offset: int = 0,
+              db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
+    limit = max(1, min(limit, 100)); offset = max(0, offset)
     query = db.query(Document)
     if q: query = query.filter(Document.filename.ilike(f"%{q}%"))
     if status: query = query.filter(Document.status == status)
-    return [serialize(d) for d in query.order_by(Document.upload_date.desc()).all()]
+    total = query.count()
+    items = query.order_by(Document.upload_date.desc()).offset(offset).limit(limit).all()
+    return {"items": [serialize_summary(d) for d in items], "total": total}
+
+
+@app.get("/documents/stats")
+def documents_stats(db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
+    total = db.query(Document).count()
+    review_required = db.query(Document).filter(Document.review_required.is_(True)).count()
+    times = [t for (t,) in db.query(Document.processing_time)
+             .filter(Document.processing_time.isnot(None)).all()]
+    avg = round(sum(times) / len(times), 2) if times else None
+    return {"total": total, "review_required": review_required, "avg_processing_time": avg}
 
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):

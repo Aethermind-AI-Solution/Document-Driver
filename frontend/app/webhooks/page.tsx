@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type Hook = { id: number; document_type: string; url: string; active: boolean; has_secret: boolean };
 
 export default function WebhooksPage() {
   const [hooks, setHooks] = useState<Hook[]>([]);
   const [form, setForm] = useState({ document_type: "", url: "", secret: "" });
+  const [pendingDelete, setPendingDelete] = useState<Hook | null>(null);
   const load = () => api("/webhooks").then(setHooks).catch(() => (window.location.href = "/login"));
   useEffect(() => { load(); }, []);
   async function add(e: React.FormEvent) {
@@ -39,11 +41,15 @@ export default function WebhooksPage() {
             <span>{h.document_type} → {h.url}{h.has_secret ? " 🔒" : ""}{h.active ? "" : " (inactive)"}</span>
             <span className="flex gap-2">
               <button onClick={() => toggle(h)} className="rounded border px-2 py-1">{h.active ? "Disable" : "Enable"}</button>
-              <button onClick={() => remove(h)} className="rounded border px-2 py-1">Delete</button>
+              <button onClick={() => setPendingDelete(h)} className="rounded border px-2 py-1">Delete</button>
             </span>
           </li>
         ))}
       </ul>
+      <ConfirmDialog open={!!pendingDelete} destructive title="Delete webhook?"
+        message={pendingDelete?`Delete the webhook for ${pendingDelete.document_type}?`:""}
+        onCancel={()=>setPendingDelete(null)}
+        onConfirm={()=>{const h=pendingDelete;setPendingDelete(null);if(h)remove(h);}} />
     </div>
   );
 }
