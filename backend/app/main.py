@@ -12,7 +12,7 @@ from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
-from .services import all_schema_keys, available_schemas, log, resolve_review_action, schema_for
+from .services import all_schema_keys, available_schemas, can_transition, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
 
@@ -254,13 +254,34 @@ def update_document(document_id: int, payload: DocumentUpdate, background_tasks:
                     user: User = Depends(auth.require_role("admin", "reviewer"))):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
+    prior_status = doc.status
+    # Reopen: finalized -> back into review, fields untouched.
+    if payload.action == "reopen":
+        if prior_status not in ("approved", "rejected"):
+            raise HTTPException(409, f"Cannot reopen a document in state '{prior_status}'")
+        if prior_status == "approved":
+            if user.role != "admin":
+                raise HTTPException(403, "Only an admin can reopen an approved document")
+            if not (payload.reason or "").strip():
+                raise HTTPException(422, "A reason is required to reopen an approved document")
+        doc.status = "reopened"; doc.review_required = True
+        reason = (payload.reason or "").strip()
+        log(db, doc.id, "Reopened", f"from {prior_status}" + (f": {reason}" if reason else ""), actor=user)
+        db.commit(); db.refresh(doc)
+        return serialize(doc)
+    # Non-reopen actions are not allowed on a finalized document — reopen first.
+    if prior_status in ("approved", "rejected"):
+        raise HTTPException(409, f"Reopen the document before editing it (state '{prior_status}')")
     for change in payload.fields:
         field = db.query(ExtractedField).filter_by(document_id=document_id, field_name=change.field_name).first()
         if field:
             field.edited_by_user = field.field_value != change.field_value
             field.field_value, field.validated = change.field_value, change.validated
     outcome = resolve_review_action(payload.action, payload.reason)
-    if outcome["status"] is not None: doc.status = outcome["status"]
+    if outcome["status"] is not None:
+        if not can_transition(prior_status, outcome["status"]):
+            raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
+        doc.status = outcome["status"]
     if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
     log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
     db.commit(); db.refresh(doc)
