@@ -11,7 +11,7 @@ from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
-from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
+from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
 from .services import all_schema_keys, available_schemas, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
@@ -147,6 +147,43 @@ def create_schema(payload: SchemaPayload, db: Session = Depends(get_db),
                   _: User = Depends(auth.require_role("admin"))):
     if payload.key in all_schema_keys(db): raise HTTPException(409, "Schema key already exists")
     item = SchemaDefinition(**payload.model_dump()); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
+
+@app.get("/schemas/suggested", response_model=list[SuggestedSchemaOut])
+def list_suggested_schemas(db: Session = Depends(get_db),
+                           _: User = Depends(auth.require_role("admin"))):
+    rows = (db.query(SchemaDefinition).filter_by(status="suggested")
+            .order_by(SchemaDefinition.created_at.desc(), SchemaDefinition.id.desc()).all())
+    return [{"id": s.id, "key": s.key, "name": s.name, "fields": s.fields,
+             "origin_document_id": s.origin_document_id, "created_at": s.created_at} for s in rows]
+
+@app.patch("/schemas/{schema_id}")
+def edit_schema(schema_id: int, payload: SchemaEditPayload, db: Session = Depends(get_db),
+                user: User = Depends(auth.require_role("admin"))):
+    s = db.get(SchemaDefinition, schema_id)
+    if not s: raise HTTPException(404, "Schema not found")
+    if payload.name is not None: s.name = payload.name
+    if payload.fields is not None: s.fields = [f.model_dump() for f in payload.fields]
+    if s.origin_document_id: log(db, s.origin_document_id, "Schema edited", s.key, actor=user)
+    db.commit(); db.refresh(s)
+    return {"id": s.id, "key": s.key, "name": s.name, "fields": s.fields, "status": s.status}
+
+@app.post("/schemas/{schema_id}/approve")
+def approve_schema(schema_id: int, db: Session = Depends(get_db),
+                   user: User = Depends(auth.require_role("admin"))):
+    s = db.get(SchemaDefinition, schema_id)
+    if not s: raise HTTPException(404, "Schema not found")
+    s.status = "approved"
+    if s.origin_document_id: log(db, s.origin_document_id, "Schema approved", s.key, actor=user)
+    db.commit(); db.refresh(s)
+    return {"id": s.id, "key": s.key, "name": s.name, "status": s.status}
+
+@app.delete("/schemas/{schema_id}", status_code=204)
+def reject_schema(schema_id: int, db: Session = Depends(get_db),
+                  user: User = Depends(auth.require_role("admin"))):
+    s = db.get(SchemaDefinition, schema_id)
+    if not s: raise HTTPException(404, "Schema not found")
+    if s.origin_document_id: log(db, s.origin_document_id, "Schema rejected", s.key, actor=user)
+    db.delete(s); db.commit()
 
 @app.post("/upload", status_code=201, dependencies=[Depends(rate_limit)])
 async def upload(file: UploadFile = File(...), document_type: str = "invoice", db: Session = Depends(get_db),
