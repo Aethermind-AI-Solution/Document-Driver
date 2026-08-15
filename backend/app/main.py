@@ -215,8 +215,8 @@ def process(document_id: int, background_tasks: BackgroundTasks, db: Session = D
     doc = db.get(Document, document_id)
     if not doc:
         raise HTTPException(404, "Document not found")
-    if doc.status == "processing":
-        raise HTTPException(409, "Document is already processing")
+    if doc.status not in {"uploaded", "error", "review_required", "processed"}:
+        raise HTTPException(409, f"Cannot reprocess a document in state '{doc.status}'")
     doc.status = "processing"; db.commit(); db.refresh(doc)
     background_tasks.add_task(run_pipeline_task, doc.id, user.id)
     return serialize(doc)

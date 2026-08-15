@@ -31,3 +31,38 @@ def test_can_transition_blocks_invalid():
     assert not services.can_transition("rejected", "approved")
     assert not services.can_transition("processing", "approved")
     assert not services.can_transition("nonsense", "approved")
+
+
+import pytest
+from app.models import Document
+import app.main as main_mod
+
+
+def _doc(db, status):
+    d = Document(filename="a.pdf", document_type="invoice", stored_path="p", status=status,
+                 review_required=(status == "review_required"))
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
+@pytest.mark.parametrize("status", ["approved", "rejected", "reopened", "processing"])
+def test_process_blocked_on_non_reprocessable(client, db_session, monkeypatch, status):
+    calls = []
+    monkeypatch.setattr(main_mod, "run_pipeline_task", lambda *a, **k: calls.append(a))
+    d = _doc(db_session, status)
+    r = client.post(f"/process/{d.id}")
+    assert r.status_code == 409
+    assert calls == []                       # pipeline never dispatched
+    db_session.refresh(d)
+    assert d.status == status                 # status untouched
+
+
+@pytest.mark.parametrize("status", ["uploaded", "error", "review_required", "processed"])
+def test_process_allowed_on_reprocessable(client, db_session, monkeypatch, status):
+    calls = []
+    monkeypatch.setattr(main_mod, "run_pipeline_task", lambda *a, **k: calls.append(a))
+    d = _doc(db_session, status)
+    r = client.post(f"/process/{d.id}")
+    assert r.status_code == 202
+    db_session.refresh(d)
+    assert d.status == "processing"
