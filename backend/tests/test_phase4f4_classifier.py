@@ -86,3 +86,24 @@ def test_disabled_flag_never_authors(ctx, monkeypatch):
     _run(clf.ClassifierAgent().run(ctx))
     assert called["v"] is False
     assert ctx.document.document_type == "invoice"      # unchanged fallback
+
+
+def test_persist_failure_falls_back_gracefully(ctx, monkeypatch):
+    monkeypatch.setattr(config, "SCHEMA_AUTHOR_ENABLED", True)
+
+    async def fake_classify(text, keys):
+        return None, 0.0
+    monkeypatch.setattr(clf, "classify_document", fake_classify)
+
+    async def fake_propose(text, existing):
+        return {"key": "manifest", "name": "Manifest",
+                "fields": [{"name": "a", "label": "A", "type": "string", "required": False}]}
+    monkeypatch.setattr(clf, "propose_schema", fake_propose)
+
+    def boom(*a, **k):
+        raise RuntimeError("unique collision")
+    monkeypatch.setattr(clf, "persist_suggested", boom)
+
+    result = _run(clf.ClassifierAgent().run(ctx))   # must not error the stage
+    assert result.status != "error"
+    assert ctx.document.document_type == "invoice"   # graceful fallback, not stuck on 'unknown'

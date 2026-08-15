@@ -46,11 +46,14 @@ class ClassifierAgent:
             if chosen is None and config.SCHEMA_AUTHOR_ENABLED:
                 proposal = await propose_schema(text, services.all_schema_keys(c.db))
                 if proposal:
-                    row = persist_suggested(c.db, proposal, c.document.id, actor=c.actor)
-                    c.document.document_type = row.key
-                    c.schema = {"name": row.name, "fields": row.fields}
-                    c._detail = f"authored:{row.key} ({conf:.2f})"
-                    return
+                    try:
+                        row = persist_suggested(c.db, proposal, c.document.id, actor=c.actor)
+                        c.document.document_type = row.key
+                        c.schema = {"name": row.name, "fields": row.fields}
+                        c._detail = f"authored:{row.key} ({conf:.2f})"
+                        return
+                    except Exception:
+                        c.db.rollback()   # discard the failed insert; degrade to the normal fallback
             if chosen is None:
                 chosen = "invoice"
             if key and key != c.hint_type:
