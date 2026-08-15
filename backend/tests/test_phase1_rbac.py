@@ -25,7 +25,7 @@ def test_viewer_can_read_documents(client, db_session):
 
 def test_edit_stamps_actor_in_audit(client, db_session):
     actor = _as(db_session, "reviewer")
-    doc = Document(filename="x.pdf", document_type="invoice", stored_path="x.pdf")
+    doc = Document(filename="x.pdf", document_type="invoice", stored_path="x.pdf", status="review_required")
     db_session.add(doc); db_session.flush()
     db_session.add(ExtractedField(document_id=doc.id, field_name="total",
                                   field_value="1", original_value="1", confidence=0.9))
