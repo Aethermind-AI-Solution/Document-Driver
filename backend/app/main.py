@@ -12,7 +12,7 @@ from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaPayload, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
-from .services import available_schemas, log, resolve_review_action, schema_for
+from .services import all_schema_keys, available_schemas, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
 
@@ -145,7 +145,7 @@ def list_schemas(db: Session = Depends(get_db), _: User = Depends(auth.get_curre
 @app.post("/schemas", status_code=201)
 def create_schema(payload: SchemaPayload, db: Session = Depends(get_db),
                   _: User = Depends(auth.require_role("admin"))):
-    if payload.key in [s["key"] for s in available_schemas(db)]: raise HTTPException(409, "Schema key already exists")
+    if payload.key in all_schema_keys(db): raise HTTPException(409, "Schema key already exists")
     item = SchemaDefinition(**payload.model_dump()); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
 
 @app.post("/upload", status_code=201, dependencies=[Depends(rate_limit)])
