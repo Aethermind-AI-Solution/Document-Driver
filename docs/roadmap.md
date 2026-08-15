@@ -57,7 +57,13 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 ## Phase 4 — Adaptivity & learning (the moat)
 *Goal: adapt to any document and get better over time. Needs Q2 + real pipeline.*
 - ✅ **B14** Learning loop from reviewer corrections (learns from human corrections on approved documents, injects hints into extraction)
-- **F4** Dynamic / AI-suggested schemas (Schema-Author agent) `L` — the real "fields aren't hardcoded" fix
+
+### Phase 4 (F4 S1) ✅ Shipped (2026-08-15)
+- ✅ **F4** Dynamic / AI-suggested schemas (Schema-Author agent) `L` — the real "fields aren't hardcoded" fix. When the classifier can't confidently match a document to any approved schema, a Schema-Author LLM auto-proposes a schema and the document is extracted against it immediately; the proposal is stored as a **suggested** draft (not yet usable by the classifier) until an admin approves, edits, or rejects it via the Suggested Schemas admin screen / `/schemas` review API — a human-gated but reusable schema catalog.
+
+### Phase 4 — Future items
+- On-demand "suggest schema from this doc" action (propose without waiting for a low-confidence classification)
+- Automatic de-duplication of near-identical suggested drafts
 - **B4+** Deeper confidence — logprobs / self-consistency / bounding boxes `M–L`
 
 ## Phase 5 — Straight-through processing & review lifecycle
