@@ -28,7 +28,8 @@ vi.mock("../lib/api", () => ({
   api: vi.fn(async (path: string, init?: any) => {
     const method = init?.method || "GET";
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
-    if (path === "/documents") return [{ ...processedDoc, status: approved ? "approved" : "processed" }];
+    if (path.startsWith("/documents/stats")) return { total: 1, review_required: 0, avg_processing_time: 1.2 };
+    if (path.startsWith("/documents")) return { items: [{ ...processedDoc, status: approved ? "approved" : "processed" }], total: 1 };
     if (path.startsWith("/document/") && method === "GET") return { ...processedDoc };
     if (path.startsWith("/document/") && method === "PUT") { approved = true; return { ...processedDoc, status: "approved", review_required: false }; }
     return {};

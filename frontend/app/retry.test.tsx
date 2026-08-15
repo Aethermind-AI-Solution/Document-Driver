@@ -7,8 +7,9 @@ vi.mock("../lib/api", () => ({
   api: vi.fn(async (path: string) => {
     if (path === "/auth/me") return { role: "admin", email: "a@b.co" };
     if (path === "/schemas") return [];
-    if (path === "/documents") return [{ id: 5, filename: "bad.pdf", document_type: "invoice",
-      status: "error", upload_date: "2026-08-09", review_required: false }];
+    if (path.startsWith("/documents/stats")) return { total: 1, review_required: 0, avg_processing_time: 1.2 };
+    if (path.startsWith("/documents")) return { items: [{ id: 5, filename: "bad.pdf", document_type: "invoice",
+      status: "error", upload_date: "2026-08-09", review_required: false }], total: 1 };
     return {};
   }),
   me: vi.fn(async () => ({ role: "admin", email: "a@b.co" })),

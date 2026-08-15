@@ -17,7 +17,8 @@ vi.mock("../lib/api", () => ({
   me: vi.fn(async () => ({ id: 1, email: "u@x.co", role, is_active: true })),
   api: vi.fn(async (path: string) => {
     if (path === "/schemas") return [{ key: "invoice", name: "Invoice", fields: [] }];
-    if (path === "/documents") return [];
+    if (path.startsWith("/documents/stats")) return { total: 0, review_required: 0, avg_processing_time: null };
+    if (path.startsWith("/documents")) return { items: [], total: 0 };
     return {};
   }),
 }));
