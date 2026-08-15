@@ -19,6 +19,7 @@ class Document(Base):
     stored_path: Mapped[str] = mapped_column(Text)
     pipeline_trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
     anomalies: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     extracted_fields: Mapped[list["ExtractedField"]] = relationship(cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(cascade="all, delete-orphan")
 
