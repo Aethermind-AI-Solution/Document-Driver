@@ -283,6 +283,7 @@ def update_document(document_id: int, payload: DocumentUpdate, background_tasks:
             raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
         doc.status = outcome["status"]
     if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
+    if outcome["status"] == "approved": doc.revision += 1
     log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
     db.commit(); db.refresh(doc)
     if outcome["status"] == "approved":

@@ -132,3 +132,33 @@ def test_approve_on_approved_conflicts(client, db_session):
     d = _doc(db_session, "approved")
     r = client.put(f"/document/{d.id}", json={"fields": [], "action": "approve"})
     assert r.status_code == 409           # must reopen first
+
+
+from app import webhooks
+
+
+def test_revision_increments_on_approve(client, db_session):
+    d = _doc(db_session, "review_required")
+    client.put(f"/document/{d.id}", json={"fields": [], "action": "approve"})
+    db_session.refresh(d)
+    assert d.revision == 1
+
+
+def test_build_payload_includes_revision(db_session):
+    d = _doc(db_session, "approved")
+    d.revision = 3; db_session.commit(); db_session.refresh(d)
+    payload = webhooks.build_payload(d, "you@x.co")
+    assert payload["revision"] == 3
+
+
+def test_reapproval_after_reopen_refires_with_revision(client, db_session, monkeypatch):
+    from app.models import WebhookConfig
+    scheduled = []
+    monkeypatch.setattr(main_mod, "deliver_webhook", lambda *a, **k: scheduled.append(a))
+    db_session.add(WebhookConfig(document_type="invoice", url="https://h/x", active=True))
+    d = _doc(db_session, "review_required"); db_session.commit()
+    client.put(f"/document/{d.id}", json={"fields": [], "action": "approve"})   # revision 1, fires
+    client.put(f"/document/{d.id}", json={"fields": [], "action": "reopen", "reason": "fix"})
+    client.put(f"/document/{d.id}", json={"fields": [], "action": "approve"})   # revision 2, fires again
+    db_session.refresh(d)
+    assert d.revision == 2 and len(scheduled) == 2
