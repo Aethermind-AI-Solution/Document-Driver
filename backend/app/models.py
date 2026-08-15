@@ -60,6 +60,9 @@ class SchemaDefinition(Base):
     key: Mapped[str] = mapped_column(String(80), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     fields: Mapped[list] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="approved", server_default="approved")
+    origin_document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=True)
 
 class WebhookConfig(Base):
     __tablename__ = "webhook_configs"

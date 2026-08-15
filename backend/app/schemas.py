@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Literal
+from datetime import datetime
 
 class FieldUpdate(BaseModel):
     field_name: str
@@ -24,6 +25,18 @@ class SchemaPayload(BaseModel):
     key: str = Field(pattern=r"^[a-z0-9_-]+$")
     name: str
     fields: list[SchemaFieldDef] = Field(min_length=1)
+
+class SchemaEditPayload(BaseModel):
+    name: str | None = None
+    fields: list[SchemaFieldDef] | None = Field(default=None, min_length=1)
+
+class SuggestedSchemaOut(BaseModel):
+    id: int
+    key: str
+    name: str
+    fields: list
+    origin_document_id: int | None = None
+    created_at: datetime | None = None
 
 class LoginRequest(BaseModel):
     email: str
