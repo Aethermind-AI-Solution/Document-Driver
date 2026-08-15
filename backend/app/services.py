@@ -29,9 +29,19 @@ def resolve_review_action(action: str, reason: str | None) -> dict:
             "log_action": "Edited", "log_details": reason or "Review values updated"}
 
 def available_schemas(db: Session):
+    """Approved schemas only (builtins + status=='approved' rows). Suggested
+    drafts are intentionally excluded from the classifier, the /schemas
+    selector, and the MCP list_document_types tool."""
     builtins = [{"key": k, **v} for k, v in SCHEMAS.items()]
-    custom = [{"key": s.key, "name": s.name, "fields": s.fields} for s in db.query(SchemaDefinition).all()]
+    custom = [{"key": s.key, "name": s.name, "fields": s.fields}
+              for s in db.query(SchemaDefinition).filter_by(status="approved").all()]
     return builtins + custom
+
+
+def all_schema_keys(db: Session) -> set[str]:
+    """Every schema key — builtins plus every DB row regardless of status.
+    Used for uniqueness checks (SchemaDefinition.key is UNIQUE)."""
+    return set(SCHEMAS.keys()) | {k for (k,) in db.query(SchemaDefinition.key).all()}
 
 def schema_for(db: Session, key: str):
     if key in SCHEMAS: return SCHEMAS[key]

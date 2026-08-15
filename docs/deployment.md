@@ -248,6 +248,26 @@ Aethermind now adapts to feedback over time by learning from human corrections.
 - `LEARNING_MAX_HINTS_PER_FIELD` — max hints per field (default: `3`)
 - `LEARNING_MAX_HINTS` — global hint cap across all fields (default: `20`)
 
+## Phase 4 (F4 S1) — dynamic schemas
+
+Aethermind can now propose new document-type schemas on the fly instead of requiring every schema to be hand-authored in advance.
+
+- **How it works:** When the classifier can't confidently match a document against any **approved** schema, a Schema-Author LLM proposes a new schema (name + fields) for it. The document is extracted against that proposed schema immediately and flagged for review, so the user isn't blocked waiting on an admin.
+- **Human-gated catalog:** The proposed schema is stored as a **suggested** draft — it is not added to the approved catalog and will not be offered to the classifier for future documents until an admin reviews and approves it. Admins manage drafts via the **Suggested Schemas** admin screen or the `/schemas` review API:
+  - `GET /schemas/suggested` — list pending drafts
+  - `PATCH /schemas/{id}` — edit a draft's name/fields before approving
+  - `POST /schemas/{id}/approve` — promote a draft to the approved catalog
+  - `DELETE /schemas/{id}` — reject/remove a draft
+- **Inert on confident matches:** Documents that classify confidently against an existing approved schema are unaffected — this feature only engages on the low-confidence/no-match path.
+- **Toggle:** Set `SCHEMA_AUTHOR_ENABLED=true` (default in `.env.example`) to turn the feature on; set to `false` to disable.
+
+**Database migration:** Migration `0005` runs automatically via the existing `alembic upgrade head` on every deploy. No manual action needed.
+
+**Environment variables** (in `.env.example`):
+- `SCHEMA_AUTHOR_ENABLED` — toggle Schema-Author on/off (default: `true`)
+
+**No new dependencies.**
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:
