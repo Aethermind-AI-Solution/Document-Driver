@@ -117,6 +117,18 @@ def _contains(hay, needle):
     larger token ("100"). Boundaries are on alphanumerics only."""
     return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", hay) is not None
 
+def document_confidence(fields: list[dict], schema_fields: list[dict]) -> float:
+    """Document-level confidence = min over REQUIRED fields, so a wrong required
+    field cannot be averaged away. Falls back to the mean of all fields when the
+    schema has no required fields; 1.0 when there are no fields at all."""
+    required_names = {f["name"] for f in schema_fields if f.get("required")}
+    req = [f["confidence"] for f in fields if f["field_name"] in required_names]
+    if req:
+        return min(req)
+    if fields:
+        return sum(f["confidence"] for f in fields) / len(fields)
+    return 1.0
+
 def _ground(value, quote, hay, hay_tokens, verifiable):
     if value is None:
         return ("absent", 0.55)

@@ -34,7 +34,7 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
             db.add(ExtractedField(document_id=document.id, original_value=f["field_value"], **f))
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
         document.anomalies = ctx.anomalies or None
-        document.confidence = sum(f["confidence"] for f in ctx.fields) / max(len(ctx.fields), 1)
+        document.confidence = services.document_confidence(ctx.fields, ctx.schema["fields"])
         document.review_required = bool(ctx.anomalies) or any(
             f["confidence"] < .9 or not f["validated"] for f in ctx.fields)
         document.status = "review_required" if document.review_required else "processed"
