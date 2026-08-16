@@ -240,7 +240,13 @@ def documents_stats(db: Session = Depends(get_db), _: User = Depends(auth.get_cu
     times = [t for (t,) in db.query(Document.processing_time)
              .filter(Document.processing_time.isnot(None)).all()]
     avg = round(sum(times) / len(times), 2) if times else None
-    return {"total": total, "review_required": review_required, "avg_processing_time": avg}
+    approved_fields = (db.query(ExtractedField.edited_by_user)
+                       .join(Document, ExtractedField.document_id == Document.id)
+                       .filter(Document.status == "approved").all())
+    agreement = round(sum(1 for (e,) in approved_fields if not e) / len(approved_fields), 2) \
+        if approved_fields else None
+    return {"total": total, "review_required": review_required, "avg_processing_time": avg,
+            "field_agreement_rate": agreement}
 
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):

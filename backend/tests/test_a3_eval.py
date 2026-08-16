@@ -136,3 +136,19 @@ def test_cli_run_builds_report(db_session, tmp_path):
     report = cli.run(db_session, min_n=1)
     assert report["n"] == 1 and "upper bound" in report["header"].lower()
     assert report["grounded_but_wrong"]["n_wrong"] == 1
+
+
+def test_stats_includes_field_agreement_rate(client, db_session):
+    d = _approved_doc(db_session)
+    db_session.add(ExtractedField(document_id=d.id, field_name="total", field_value="1",
+                                  original_value="1", edited_by_user=False, confidence=0.9))
+    db_session.add(ExtractedField(document_id=d.id, field_name="tax", field_value="2",
+                                  original_value="0", edited_by_user=True, confidence=0.9))
+    db_session.commit()
+    s = client.get("/documents/stats").json()
+    assert abs(s["field_agreement_rate"] - 0.5) < 1e-9   # 1 of 2 fields unedited
+
+
+def test_stats_field_agreement_none_when_no_approved(client, db_session):
+    s = client.get("/documents/stats").json()
+    assert s["field_agreement_rate"] is None
