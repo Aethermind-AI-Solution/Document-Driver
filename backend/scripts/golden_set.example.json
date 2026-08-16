@@ -1,0 +1,6 @@
+{
+  "_comment": "Golden set format for scripts/eval.py --golden. Curate real entries before enabling B9 auto-approve. Each document references an existing document_id and its human-verified expected field values.",
+  "documents": [
+    { "document_id": 0, "expected": { "total": "1234.56", "invoice_number": "INV-001" } }
+  ]
+}

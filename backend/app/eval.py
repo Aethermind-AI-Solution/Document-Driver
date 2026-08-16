@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from math import sqrt
 
+from . import services
+from .models import Document, ExtractedField
+
 # Bucket edges aligned to the fixed _ground confidence constants.
 _BUCKETS = [(0.0, 0.475, "0.40"), (0.475, 0.625, "0.55"), (0.625, 0.80, "0.70"),
             (0.80, 0.925, "0.90"), (0.925, 1.01, "0.95")]
@@ -80,3 +83,52 @@ def build_report(records, min_n: int = 30) -> dict:
         "reliability": reliability_table(records, min_n),
         "grounded_but_wrong": grounded_but_wrong_rate(records),
     }
+
+
+def correction_records(db, document_type: str | None = None) -> list[EvalRecord]:
+    """EvalRecords from APPROVED documents' fields. correct = the AI value was NOT
+    later changed by a human (unedited fields are presumed — weakly — correct)."""
+    q = (db.query(ExtractedField, Document.document_type)
+         .join(Document, ExtractedField.document_id == Document.id)
+         .filter(Document.status == "approved"))
+    if document_type:
+        q = q.filter(Document.document_type == document_type)
+    schema_cache: dict = {}
+    out = []
+    for ef, dt in q.all():
+        if dt not in schema_cache:
+            try:
+                schema_cache[dt] = {f["name"]: f for f in services.schema_for(db, dt)["fields"]}
+            except Exception:
+                schema_cache[dt] = {}
+        required = bool(schema_cache[dt].get(ef.field_name, {}).get("required"))
+        correct = not (ef.edited_by_user and ef.original_value is not None
+                       and ef.field_value is not None and ef.original_value != ef.field_value)
+        out.append(EvalRecord(dt, ef.field_name, required, ef.confidence,
+                              ef.grounded or "unverified", correct, "corrections"))
+    return out
+
+
+def golden_records(db, fixture: dict) -> list[EvalRecord]:
+    """EvalRecords comparing stored extraction against a hand-labeled golden fixture:
+    {"documents": [{"document_id": int, "expected": {field_name: value}}]}."""
+    out = []
+    for entry in fixture.get("documents", []):
+        doc = db.get(Document, entry["document_id"])
+        if not doc:
+            continue
+        try:
+            schema = {f["name"]: f for f in services.schema_for(db, doc.document_type)["fields"]}
+        except Exception:
+            schema = {}
+        by_name = {ef.field_name: ef for ef in doc.extracted_fields}
+        for fname, expected in (entry.get("expected") or {}).items():
+            ef = by_name.get(fname)
+            if ef is None:
+                continue
+            required = bool(schema.get(fname, {}).get("required"))
+            correct = services._norm(str(ef.field_value)) == services._norm(str(expected)) \
+                if ef.field_value is not None else (expected in (None, ""))
+            out.append(EvalRecord(doc.document_type, fname, required, ef.confidence,
+                                  ef.grounded or "unverified", bool(correct), "golden"))
+    return out
