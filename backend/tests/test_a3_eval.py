@@ -113,3 +113,26 @@ def test_golden_records_compares_to_expected(db_session):
     recs = {r.field_name: r for r in evalmod.golden_records(db_session, fixture)}
     assert recs["total"].correct is True and recs["total"].source == "golden"
     assert recs["invoice_number"].correct is False
+
+
+import importlib.util
+from pathlib import Path
+
+_CLI = Path(__file__).resolve().parents[1] / "scripts" / "eval.py"
+
+
+def _load_cli():
+    spec = importlib.util.spec_from_file_location("a3_eval_cli", _CLI)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+
+
+def test_cli_run_builds_report(db_session, tmp_path):
+    d = _approved_doc(db_session)
+    db_session.add(ExtractedField(document_id=d.id, field_name="total", field_value="1",
+                                  original_value="2", edited_by_user=True, confidence=0.95, grounded="grounded"))
+    db_session.commit()
+    cli = _load_cli()
+    report = cli.run(db_session, min_n=1)
+    assert report["n"] == 1 and "upper bound" in report["header"].lower()
+    assert report["grounded_but_wrong"]["n_wrong"] == 1
