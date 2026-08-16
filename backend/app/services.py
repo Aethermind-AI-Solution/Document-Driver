@@ -8,6 +8,22 @@ from .document_schemas import SCHEMAS
 from .auth import hash_password
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
 
+TRANSITIONS: dict[str, set[str]] = {
+    "uploaded":        {"processing"},
+    "processing":      {"processed", "review_required", "error"},
+    "error":           {"processing"},
+    "processed":       {"approved", "rejected"},
+    "review_required": {"approved", "rejected"},
+    "approved":        {"reopened"},
+    "rejected":        {"reopened"},
+    "reopened":        {"approved", "rejected"},
+}
+
+
+def can_transition(current: str, target: str) -> bool:
+    return target in TRANSITIONS.get(current, set())
+
+
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
     db.add(AuditLog(document_id=document_id, action=action, details=details,
                     actor_id=getattr(actor, "id", None),

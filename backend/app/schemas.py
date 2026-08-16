@@ -9,7 +9,7 @@ class FieldUpdate(BaseModel):
 
 class DocumentUpdate(BaseModel):
     fields: list[FieldUpdate]
-    action: Literal["approve", "reject", "save"] = "save"
+    action: Literal["approve", "reject", "save", "reopen"] = "save"
     reason: str | None = None
 
 class SchemaFieldDef(BaseModel):

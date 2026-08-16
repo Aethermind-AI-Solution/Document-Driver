@@ -15,6 +15,7 @@ def build_payload(doc: Document, approved_by: str) -> dict:
     return {
         "event": "document.approved", "document_id": doc.id, "filename": doc.filename,
         "document_type": doc.document_type, "status": doc.status, "confidence": doc.confidence,
+        "revision": doc.revision,
         "approved_by": approved_by,
         "fields": [{"field_name": f.field_name, "field_value": f.field_value,
                     "confidence": f.confidence, "grounded": f.grounded}
