@@ -268,6 +268,18 @@ Aethermind can now propose new document-type schemas on the fly instead of requi
 
 **No new dependencies.**
 
+## B11 — reopen / rework
+
+Reviewers can now pull a finalized document back into review instead of it dead-ending after approve/reject.
+
+- **How it works:** An `approved` or `rejected` document can be **reopened** from the Review panel — it moves to a `reopened` status (re-enters the review queue) with all extracted fields and human corrections **preserved** (no AI re-run). Reopening an **approved** document is **admin-only** and requires a reason; reopening a rejected one is available to reviewers.
+- **State machine:** Document status transitions are now enforced by an explicit allow-list (`services.TRANSITIONS`/`can_transition`), applied at `PUT /document/{id}` and `POST /process/{id}`. Reprocessing is refused for `approved`/`rejected`/`reopened`/`processing` documents (previously `/process` could silently re-run on a finalized document and wipe its corrections). Non-reopen actions on a finalized document are rejected — reopen is the only sanctioned way back into review.
+- **Webhook revision:** each approval increments `Document.revision`, and the webhook payload now carries an additive `revision` field so a re-approval after rework is dedupable downstream (consumers upsert by `document_id` + `revision`).
+
+**Database migration:** Migration `0006` (adds `Document.revision`, default `0`) runs automatically via `alembic upgrade head`. No manual action needed.
+
+**No new dependencies or environment variables.**
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:
