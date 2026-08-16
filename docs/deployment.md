@@ -280,6 +280,15 @@ Reviewers can now pull a finalized document back into review instead of it dead-
 
 **No new dependencies or environment variables.**
 
+## A3 — accuracy measurement & confidence
+
+- **Required-field-aware confidence:** `document.confidence` is now `services.document_confidence(...)` = the **min over required fields** (a wrong required field can no longer be averaged away by trivial correct ones). The per-field `review_required` logic is unchanged; existing rows keep their stored confidence until reprocessed.
+- **Accuracy report:** run `python scripts/eval.py` (from `backend/`) for a correction-derived accuracy + calibration report (per-field agreement, confidence-bucket reliability with Wilson lower bounds + minimum-sample gating, and the "grounded-but-wrong" rate). **The numbers are an upper bound** — unaudited-but-approved fields are counted correct. Flags: `--document-type`, `--min-n` (default 30), `--json out.json`, `--golden fixture.json`.
+- **Golden set:** the loader + fixture format ship (`backend/scripts/golden_set.example.json`); curating a real hand-labeled golden set (the only unbiased anchor) is a **prerequisite before enabling B9 auto-approve**.
+- **Surfaced signal:** `GET /documents/stats` now returns `field_agreement_rate` (fraction of approved-doc fields left unedited), shown as the "Fields accepted as-is" dashboard tile — deliberately **not** labeled "accuracy".
+
+**No migration, no new dependencies or environment variables.** (Note: run `alembic upgrade head` on any stale local dev SQLite before running `scripts/eval.py`.)
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:
