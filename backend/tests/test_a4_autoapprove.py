@@ -59,3 +59,37 @@ def test_human_approve_still_works(client, db_session):
     assert r.status_code == 200
     db_session.refresh(d)
     assert d.status == "approved" and d.revision == 1
+
+
+from app.models import AutoApproveConfig
+from app import config as appconfig
+
+
+def _cfg(db, dt="invoice", enabled=True, floor=0.95):
+    c = AutoApproveConfig(document_type=dt, enabled=enabled, min_confidence=floor)
+    db.add(c); db.commit()
+
+
+def test_should_auto_approve_true_when_all_conditions(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.96; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is True
+
+
+def test_should_auto_approve_false_paths(db_session, monkeypatch):
+    _cfg(db_session)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.96; db_session.commit()
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", False)
+    assert services.should_auto_approve(db_session, d) is False          # global off
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    d.confidence = 0.80; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # below floor
+    d.confidence = 0.96; d.review_required = True; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # review_required
+
+
+def test_should_auto_approve_false_when_no_config(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.99; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # no AutoApproveConfig row
