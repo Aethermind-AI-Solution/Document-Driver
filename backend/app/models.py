@@ -73,3 +73,11 @@ class WebhookConfig(Base):
     secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+class AutoApproveConfig(Base):
+    __tablename__ = "auto_approve_configs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_type: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    min_confidence: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

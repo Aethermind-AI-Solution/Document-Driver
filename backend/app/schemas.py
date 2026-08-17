@@ -81,3 +81,19 @@ class WebhookOut(BaseModel):
     url: str
     active: bool
     has_secret: bool
+
+class AutoApproveCreate(BaseModel):
+    document_type: str = Field(pattern=r"^[a-z0-9_-]+$")
+    enabled: bool = False
+    min_confidence: float = Field(gt=0.9, le=1.0)
+
+class AutoApproveUpdate(BaseModel):
+    enabled: bool | None = None
+    min_confidence: float | None = Field(default=None, gt=0.9, le=1.0)
+
+class AutoApproveOut(BaseModel):
+    id: int
+    document_type: str
+    enabled: bool
+    min_confidence: float
+    created_at: datetime | None = None
