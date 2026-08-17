@@ -93,3 +93,69 @@ def test_should_auto_approve_false_when_no_config(db_session, monkeypatch):
     monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
     d = _doc(db_session); d.review_required = False; d.confidence = 0.99; db_session.commit()
     assert services.should_auto_approve(db_session, d) is False          # no AutoApproveConfig row
+
+
+from app.agents import pipeline
+from app.models import AuditLog, WebhookConfig
+
+
+def test_maybe_auto_approve_eligible_no_webhook(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "approved"
+    assert d.auto_approved is True
+    assert d.revision == 1
+    audits = db_session.query(AuditLog).filter_by(document_id=d.id, action="Auto-approved").all()
+    assert len(audits) == 1
+    assert audits[0].actor_email is None
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_eligible_with_webhook(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    cfg_w = WebhookConfig(document_type="invoice", url="https://h/x", active=True)
+    db_session.add(cfg_w); db_session.commit(); db_session.refresh(cfg_w)
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "approved"
+    assert d.webhook_status == "pending"
+    assert spy_calls == [(cfg_w.id, d.id, "system:auto-approve")]
+
+
+def test_maybe_auto_approve_not_eligible_global_off(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", False)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_review_required(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="review_required")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "review_required"
+    assert d.auto_approved is False
+    assert spy_calls == []

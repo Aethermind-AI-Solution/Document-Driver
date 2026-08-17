@@ -3,7 +3,8 @@ from pathlib import Path
 from dataclasses import asdict
 from sqlalchemy.orm import Session
 from .. import services, storage
-from ..models import Document, ExtractedField
+from ..models import Document, ExtractedField, WebhookConfig
+from ..webhooks import deliver_webhook
 from .base import PipelineContext
 from .pages import split_pages
 from .classifier import ClassifierAgent
@@ -12,6 +13,21 @@ from .reconciler import ReconcilerAgent
 from .validator import ValidatorAgent
 
 STAGES = [ClassifierAgent, ExtractorAgent, ReconcilerAgent, ValidatorAgent]
+
+
+def _maybe_auto_approve(db: Session, document: Document) -> None:
+    if not services.should_auto_approve(db, document):
+        return
+    services.apply_approval(db, document, prior_status=document.status, actor=None,
+                            action_label="Auto-approved",
+                            details=f"confidence {document.confidence:.2f} >= floor; validator-clean, no anomalies")
+    document.auto_approved = True
+    cfg_w = db.query(WebhookConfig).filter_by(document_type=document.document_type, active=True).first()
+    if cfg_w:
+        document.webhook_status = "pending"
+    db.commit(); db.refresh(document)
+    if cfg_w:
+        deliver_webhook(cfg_w.id, document.id, "system:auto-approve")
 
 
 async def run_pipeline(db: Session, document: Document, hint_type: str, actor=None) -> Document:
@@ -41,7 +57,9 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         document.processing_time = round(time.perf_counter() - started, 2)
         services.log(db, document.id, "Processed",
                      f"Applied {document.document_type} schema", actor=actor)
-        db.commit(); db.refresh(document); return document
+        db.commit(); db.refresh(document)
+        _maybe_auto_approve(db, document)
+        return document
     except Exception as exc:
         document.status = "error"
         services.log(db, document.id, "Processing failed", str(exc), actor=actor)
