@@ -12,7 +12,7 @@ from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
 from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
 from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
-from .services import all_schema_keys, available_schemas, can_transition, log, resolve_review_action, schema_for
+from .services import all_schema_keys, apply_approval, available_schemas, can_transition, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
 
@@ -284,17 +284,25 @@ def update_document(document_id: int, payload: DocumentUpdate, background_tasks:
             field.edited_by_user = field.field_value != change.field_value
             field.field_value, field.validated = change.field_value, change.validated
     outcome = resolve_review_action(payload.action, payload.reason)
-    if outcome["status"] is not None:
-        if not can_transition(prior_status, outcome["status"]):
-            raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
-        doc.status = outcome["status"]
-    if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
-    if outcome["status"] == "approved": doc.revision += 1
-    log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
+    if outcome["status"] == "approved":
+        try:
+            apply_approval(db, doc, prior_status, actor=user,
+                           action_label=outcome["log_action"], details=outcome["log_details"])
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+    else:
+        if outcome["status"] is not None:
+            if not can_transition(prior_status, outcome["status"]):
+                raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
+            doc.status = outcome["status"]
+        if outcome["review_required"] is not None:
+            doc.review_required = outcome["review_required"]
+        log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
     db.commit(); db.refresh(doc)
     if outcome["status"] == "approved":
         cfg = db.query(WebhookConfig).filter_by(document_type=doc.document_type, active=True).first()
         if cfg:
+            doc.webhook_status = "pending"; db.commit()
             background_tasks.add_task(deliver_webhook, cfg.id, doc.id, user.email)
     return serialize(doc)
 

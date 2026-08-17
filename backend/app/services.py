@@ -29,6 +29,17 @@ def log(db: Session, document_id: int, action: str, details: str = "", actor=Non
                     actor_id=getattr(actor, "id", None),
                     actor_email=getattr(actor, "email", None)))
 
+def apply_approval(db: Session, document, prior_status: str, actor,
+                   action_label: str = "Approved", details: str = "") -> None:
+    """The single 'become approved' state change (status + revision + audit),
+    used by both the human PUT /document path and the pipeline auto-approve path."""
+    if not can_transition(prior_status, "approved"):
+        raise ValueError(f"Cannot move a document from '{prior_status}' to 'approved'")
+    document.status = "approved"
+    document.review_required = False
+    document.revision += 1
+    log(db, document.id, action_label, details, actor=actor)
+
 def resolve_review_action(action: str, reason: str | None) -> dict:
     """Map a review action to status/flag overrides and an audit entry.
 
