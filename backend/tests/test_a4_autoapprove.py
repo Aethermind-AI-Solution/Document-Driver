@@ -265,3 +265,109 @@ def test_deliver_webhook_success_first_try_no_retry(db_session, monkeypatch):
     doc = db_session.get(Document, doc_id)
     assert calls["n"] == 1
     assert doc.webhook_status == "delivered"
+
+
+# ---- /auto-approve admin CRUD + /auto-approve/eval/{type} ----------------
+
+from app import auth
+from app.main import app
+from app.models import User
+
+
+def _as_role(db, role):
+    u = User(email=f"{role}@x.co", password_hash="x", role=role, is_active=True)
+    db.add(u); db.commit()
+    app.dependency_overrides[auth.get_current_user] = lambda: u
+    return u
+
+
+def test_autoapprove_create_list(client, db_session):
+    r = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                            "min_confidence": 0.95})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["document_type"] == "invoice"
+    assert body["enabled"] is False
+    assert body["min_confidence"] == 0.95
+    assert "id" in body and "created_at" in body
+
+    listed = client.get("/auto-approve").json()
+    assert any(c["document_type"] == "invoice" for c in listed)
+
+
+def test_autoapprove_duplicate_type_409(client, db_session):
+    client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.95})
+    dup = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.97})
+    assert dup.status_code == 409
+
+
+def test_autoapprove_floor_validation_422(client, db_session):
+    at_floor = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.9})
+    assert at_floor.status_code == 422
+    below_floor = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.5})
+    assert below_floor.status_code == 422
+
+
+def test_autoapprove_patch_enable_and_floor(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                              "min_confidence": 0.95}).json()["id"]
+    r = client.patch(f"/auto-approve/{cid}", json={"enabled": True, "min_confidence": 0.98})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["min_confidence"] == 0.98
+
+
+def test_autoapprove_patch_missing_404(client, db_session):
+    assert client.patch("/auto-approve/999999", json={"enabled": True}).status_code == 404
+
+
+def test_autoapprove_delete(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice",
+                                              "min_confidence": 0.95}).json()["id"]
+    assert client.delete(f"/auto-approve/{cid}").status_code == 204
+    assert client.delete(f"/auto-approve/{cid}").status_code == 404
+
+
+def test_autoapprove_enable_logs_via_app_logger(client, db_session, monkeypatch):
+    # Monkeypatch the logger instance directly rather than relying on caplog/stdlib
+    # propagation: alembic's migration tests call command.upgrade(), which loads
+    # alembic.ini via logging.config.fileConfig() and (by default) DISABLES every
+    # pre-existing logger not listed in that ini -- including "aethermind". When the
+    # full suite runs, those migration tests execute before this one in the same
+    # process, so a caplog-based assertion on the "aethermind" logger would be
+    # order-dependent and flaky.
+    from app import main as main_mod
+    calls = []
+    monkeypatch.setattr(main_mod._log, "info", lambda *a, **k: calls.append((a, k)))
+
+    cid = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                              "min_confidence": 0.95}).json()["id"]
+    r = client.patch(f"/auto-approve/{cid}", json={"enabled": True})
+    assert r.status_code == 200
+    assert calls and "Auto-approve ENABLED" in calls[0][0][0]
+    assert calls[0][0][1] == "invoice"
+
+
+def test_autoapprove_admin_only(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice",
+                                              "min_confidence": 0.95}).json()["id"]
+    _as_role(db_session, "reviewer")
+    try:
+        assert client.get("/auto-approve").status_code == 403
+        assert client.post("/auto-approve", json={"document_type": "x",
+                                                    "min_confidence": 0.95}).status_code == 403
+        assert client.patch(f"/auto-approve/{cid}", json={"enabled": True}).status_code == 403
+        assert client.delete(f"/auto-approve/{cid}").status_code == 403
+        assert client.get("/auto-approve/eval/invoice").status_code == 403
+    finally:
+        app.dependency_overrides.pop(auth.get_current_user, None)
+
+
+def test_autoapprove_eval_endpoint_shape(client, db_session):
+    r = client.get("/auto-approve/eval/invoice")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, dict)
+    assert set(body.keys()) == {"n", "header", "per_field", "reliability", "grounded_but_wrong"}
+    assert body["n"] == 0

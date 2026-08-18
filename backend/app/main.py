@@ -10,11 +10,12 @@ from . import auth, config, mcp_server
 from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
-from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
+from .models import AuditLog, AutoApproveConfig, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
+from .schemas import AutoApproveCreate, AutoApproveOut, AutoApproveUpdate, DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
 from .services import all_schema_keys, apply_approval, available_schemas, can_transition, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
+from . import eval as eval_mod
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
 config.check_production_config()
@@ -347,6 +348,48 @@ def delete_webhook(webhook_id: int, db: Session = Depends(get_db),
     w = db.get(WebhookConfig, webhook_id)
     if not w: raise HTTPException(404, "Webhook not found")
     db.delete(w); db.commit()
+
+def _autoapprove_out(c: AutoApproveConfig) -> dict:
+    return {"id": c.id, "document_type": c.document_type, "enabled": c.enabled,
+            "min_confidence": c.min_confidence, "created_at": c.created_at}
+
+@app.get("/auto-approve", response_model=list[AutoApproveOut])
+def list_auto_approve(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    return [_autoapprove_out(c) for c in db.query(AutoApproveConfig).order_by(AutoApproveConfig.document_type).all()]
+
+@app.post("/auto-approve", status_code=201, response_model=AutoApproveOut)
+def create_auto_approve(payload: AutoApproveCreate, db: Session = Depends(get_db),
+                        _: User = Depends(auth.require_role("admin"))):
+    if db.query(AutoApproveConfig).filter_by(document_type=payload.document_type).first():
+        raise HTTPException(409, "An auto-approve config for that document type already exists")
+    c = AutoApproveConfig(**payload.model_dump()); db.add(c); db.commit(); db.refresh(c)
+    return _autoapprove_out(c)
+
+@app.patch("/auto-approve/{config_id}", response_model=AutoApproveOut)
+def update_auto_approve(config_id: int, payload: AutoApproveUpdate, db: Session = Depends(get_db),
+                        user: User = Depends(auth.require_role("admin"))):
+    c = db.get(AutoApproveConfig, config_id)
+    if not c: raise HTTPException(404, "Auto-approve config not found")
+    was_enabled = c.enabled
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(c, k, v)
+    if not was_enabled and c.enabled:
+        _log.info("Auto-approve ENABLED for %s (floor %.2f) by %s",
+                  c.document_type, c.min_confidence, user.email)
+    db.commit(); db.refresh(c)
+    return _autoapprove_out(c)
+
+@app.delete("/auto-approve/{config_id}", status_code=204)
+def delete_auto_approve(config_id: int, db: Session = Depends(get_db),
+                        _: User = Depends(auth.require_role("admin"))):
+    c = db.get(AutoApproveConfig, config_id)
+    if not c: raise HTTPException(404, "Auto-approve config not found")
+    db.delete(c); db.commit()
+
+@app.get("/auto-approve/eval/{document_type}")
+def auto_approve_eval(document_type: str, db: Session = Depends(get_db),
+                      _: User = Depends(auth.require_role("admin"))):
+    return eval_mod.build_report(eval_mod.correction_records(db, document_type))
 
 def mount_mcp(app) -> bool:
     """Mount the MCP server at /mcp only when a token is configured."""
