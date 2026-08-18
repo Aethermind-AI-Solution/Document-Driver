@@ -188,3 +188,80 @@ def test_maybe_auto_approve_not_eligible_below_floor(db_session, monkeypatch):
     assert d.status == "processed"
     assert d.auto_approved is False
     assert spy_calls == []
+
+
+from app import webhooks
+
+
+def _wh_seed(db, secret=None, active=True):
+    cfg = WebhookConfig(document_type="invoice", url="https://hook/x", secret=secret, active=active)
+    doc = Document(filename="a.pdf", document_type="invoice", stored_path="a", status="approved")
+    db.add_all([cfg, doc]); db.commit(); db.refresh(cfg); db.refresh(doc)
+    return cfg, doc
+
+
+def test_deliver_webhook_retries_then_succeeds(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    class FakeResp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def flaky_post(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return FakeResp(500)
+        return FakeResp(200)
+
+    monkeypatch.setattr(webhooks.requests, "post", flaky_post)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == 3
+    assert doc.webhook_status == "delivered"
+    assert doc.webhook_detail == "https://hook/x (200)"
+    assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook delivered").count() == 1
+
+
+def test_deliver_webhook_all_attempts_fail(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    def always_boom(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        raise RuntimeError("conn refused")
+
+    monkeypatch.setattr(webhooks.requests, "post", always_boom)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")   # must not raise
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == webhooks._RETRIES
+    assert doc.webhook_status == "failed"
+    assert doc.webhook_detail
+    assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook failed").count() == 1
+
+
+def test_deliver_webhook_success_first_try_no_retry(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr(webhooks.requests, "post", fake_post)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == 1
+    assert doc.webhook_status == "delivered"
