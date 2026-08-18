@@ -159,3 +159,32 @@ def test_maybe_auto_approve_not_eligible_review_required(db_session, monkeypatch
     assert d.status == "review_required"
     assert d.auto_approved is False
     assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_type_disabled(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session, enabled=False)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_below_floor(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session, floor=0.9)
+    d = _doc(db_session, status="processed")
+    d.confidence = 0.5; db_session.commit()
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
