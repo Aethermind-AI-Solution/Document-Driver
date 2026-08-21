@@ -41,4 +41,41 @@ describe("auto-approve surfacing", () => {
 
     expect(screen.getByText("Webhook failures")).toBeTruthy();
   });
+
+  it("shows 'No documents match your filters' when auto-approved-only filter matches no docs", async () => {
+    const allNonApprovedItems = [
+      { id: 1, filename: "doc1.pdf", document_type: "invoice", status: "processed", upload_date: "2026-08-15", review_required: true, auto_approved: false },
+      { id: 2, filename: "doc2.pdf", document_type: "invoice", status: "processed", upload_date: "2026-08-15", review_required: true, auto_approved: false },
+    ];
+    apiMock.mockImplementation(async (path: string) => {
+      if (path === "/auth/me") return { role: "admin", email: "a@b.co" };
+      if (path === "/schemas") return [];
+      if (path.startsWith("/documents/stats")) return { total: 2, review_required: 2, avg_processing_time: 1, auto_approved: 0, auto_approved_reopen_rate: null, webhook_failed: 0 };
+      if (path.startsWith("/documents")) return { items: allNonApprovedItems, total: 2 };
+      return {};
+    });
+
+    const { getByRole } = render(<Home />);
+
+    // Wait for docs to load
+    await waitFor(() => expect(screen.getByText("doc1.pdf")).toBeTruthy());
+
+    // Verify docs are visible before filtering
+    expect(screen.getByText("doc1.pdf")).toBeTruthy();
+    expect(screen.getByText("doc2.pdf")).toBeTruthy();
+
+    // Click the auto-approved-only checkbox
+    const checkbox = getByRole("checkbox");
+    await waitFor(() => {
+      expect(checkbox).toBeTruthy();
+    });
+    checkbox.click();
+
+    // Verify empty state message appears and rows are gone
+    await waitFor(() => {
+      expect(screen.getByText("No documents match your filters.")).toBeTruthy();
+    });
+    expect(screen.queryByText("doc1.pdf")).toBeFalsy();
+    expect(screen.queryByText("doc2.pdf")).toBeFalsy();
+  });
 });
