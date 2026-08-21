@@ -6,7 +6,7 @@ from .config import GEMINI_MODEL, OPENAI_MODEL
 from . import config
 from .document_schemas import SCHEMAS
 from .auth import hash_password
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User
+from .models import AuditLog, AutoApproveConfig, Document, ExtractedField, SchemaDefinition, User
 
 TRANSITIONS: dict[str, set[str]] = {
     "uploaded":        {"processing"},
@@ -28,6 +28,30 @@ def log(db: Session, document_id: int, action: str, details: str = "", actor=Non
     db.add(AuditLog(document_id=document_id, action=action, details=details,
                     actor_id=getattr(actor, "id", None),
                     actor_email=getattr(actor, "email", None)))
+
+def apply_approval(db: Session, document, prior_status: str, actor,
+                   action_label: str = "Approved", details: str = "") -> None:
+    """The single 'become approved' state change (status + revision + audit),
+    used by both the human PUT /document path and the pipeline auto-approve path."""
+    if not can_transition(prior_status, "approved"):
+        raise ValueError(f"Cannot move a document from '{prior_status}' to 'approved'")
+    document.status = "approved"
+    document.review_required = False
+    document.revision += 1
+    log(db, document.id, action_label, details, actor=actor)
+
+def should_auto_approve(db: Session, document) -> bool:
+    """True iff global flag on AND this type opted-in AND the doc cleared review
+    AND its (already-computed) confidence meets the per-type floor. Reads the
+    pipeline's committed confidence/review_required — never recomputes them."""
+    if not config.AUTO_APPROVE_ENABLED:
+        return False
+    cfg = db.query(AutoApproveConfig).filter_by(document_type=document.document_type).first()
+    if not cfg or not cfg.enabled:
+        return False
+    return (not document.review_required
+            and document.confidence is not None
+            and document.confidence >= cfg.min_confidence)
 
 def resolve_review_action(action: str, reason: str | None) -> dict:
     """Map a review action to status/flag overrides and an audit entry.

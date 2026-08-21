@@ -1,0 +1,466 @@
+from pathlib import Path
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, inspect
+
+BACKEND = Path(__file__).resolve().parents[1]
+
+
+def test_migration_0007_creates_table(tmp_path):
+    url = f"sqlite:///{tmp_path / 'm.db'}"
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "head")
+    assert "auto_approve_configs" in inspect(create_engine(url)).get_table_names()
+
+
+def test_migration_0008_adds_document_columns(tmp_path):
+    url = f"sqlite:///{tmp_path / 'm2.db'}"
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.upgrade(cfg, "head")
+    cols = {c["name"] for c in inspect(create_engine(url)).get_columns("documents")}
+    assert {"webhook_status", "webhook_detail", "auto_approved"} <= cols
+
+
+import pytest
+from app import services
+from app.models import Document
+
+
+def _doc(db, status="review_required"):
+    d = Document(filename="a.pdf", document_type="invoice", stored_path="p",
+                 status=status, review_required=(status == "review_required"), confidence=0.95)
+    db.add(d); db.commit(); db.refresh(d)
+    return d
+
+
+def test_apply_approval_sets_state_and_audits(db_session):
+    d = _doc(db_session)
+    services.apply_approval(db_session, d, prior_status="review_required", actor=None,
+                            action_label="Auto-approved", details="conf 0.95")
+    db_session.commit(); db_session.refresh(d)
+    assert d.status == "approved" and d.review_required is False and d.revision == 1
+    from app.models import AuditLog
+    assert db_session.query(AuditLog).filter_by(document_id=d.id, action="Auto-approved").count() == 1
+
+
+def test_apply_approval_rejects_illegal_transition(db_session):
+    d = _doc(db_session, status="uploaded")
+    with pytest.raises(ValueError):
+        services.apply_approval(db_session, d, prior_status="uploaded", actor=None)
+
+
+def test_human_approve_still_works(client, db_session):
+    d = _doc(db_session)
+    r = client.put(f"/document/{d.id}", json={"fields": [], "action": "approve"})
+    assert r.status_code == 200
+    db_session.refresh(d)
+    assert d.status == "approved" and d.revision == 1
+
+
+from app.models import AutoApproveConfig
+from app import config as appconfig
+
+
+def _cfg(db, dt="invoice", enabled=True, floor=0.95):
+    c = AutoApproveConfig(document_type=dt, enabled=enabled, min_confidence=floor)
+    db.add(c); db.commit()
+
+
+def test_should_auto_approve_true_when_all_conditions(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.96; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is True
+
+
+def test_should_auto_approve_false_paths(db_session, monkeypatch):
+    _cfg(db_session)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.96; db_session.commit()
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", False)
+    assert services.should_auto_approve(db_session, d) is False          # global off
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    d.confidence = 0.80; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # below floor
+    d.confidence = 0.96; d.review_required = True; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # review_required
+
+
+def test_should_auto_approve_false_when_no_config(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    d = _doc(db_session); d.review_required = False; d.confidence = 0.99; db_session.commit()
+    assert services.should_auto_approve(db_session, d) is False          # no AutoApproveConfig row
+
+
+from app.agents import pipeline
+from app.models import AuditLog, WebhookConfig
+
+
+def test_maybe_auto_approve_eligible_no_webhook(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "approved"
+    assert d.auto_approved is True
+    assert d.revision == 1
+    audits = db_session.query(AuditLog).filter_by(document_id=d.id, action="Auto-approved").all()
+    assert len(audits) == 1
+    assert audits[0].actor_email is None
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_eligible_with_webhook(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    cfg_w = WebhookConfig(document_type="invoice", url="https://h/x", active=True)
+    db_session.add(cfg_w); db_session.commit(); db_session.refresh(cfg_w)
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "approved"
+    assert d.webhook_status == "pending"
+    assert spy_calls == [(cfg_w.id, d.id, "system:auto-approve")]
+
+
+def test_maybe_auto_approve_not_eligible_global_off(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", False)
+    _cfg(db_session)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_review_required(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session)
+    d = _doc(db_session, status="review_required")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "review_required"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_type_disabled(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session, enabled=False)
+    d = _doc(db_session, status="processed")
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+def test_maybe_auto_approve_not_eligible_below_floor(db_session, monkeypatch):
+    monkeypatch.setattr(appconfig, "AUTO_APPROVE_ENABLED", True)
+    _cfg(db_session, floor=0.9)
+    d = _doc(db_session, status="processed")
+    d.confidence = 0.5; db_session.commit()
+    spy_calls = []
+    monkeypatch.setattr(pipeline, "deliver_webhook", lambda *a: spy_calls.append(a))
+
+    pipeline._maybe_auto_approve(db_session, d)
+
+    assert d.status == "processed"
+    assert d.auto_approved is False
+    assert spy_calls == []
+
+
+from app import webhooks
+
+
+def _wh_seed(db, secret=None, active=True):
+    cfg = WebhookConfig(document_type="invoice", url="https://hook/x", secret=secret, active=active)
+    doc = Document(filename="a.pdf", document_type="invoice", stored_path="a", status="approved")
+    db.add_all([cfg, doc]); db.commit(); db.refresh(cfg); db.refresh(doc)
+    return cfg, doc
+
+
+def test_deliver_webhook_retries_then_succeeds(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    class FakeResp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def flaky_post(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return FakeResp(500)
+        return FakeResp(200)
+
+    monkeypatch.setattr(webhooks.requests, "post", flaky_post)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == 3
+    assert doc.webhook_status == "delivered"
+    assert doc.webhook_detail == "https://hook/x (200)"
+    assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook delivered").count() == 1
+
+
+def test_deliver_webhook_all_attempts_fail(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    def always_boom(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        raise RuntimeError("conn refused")
+
+    monkeypatch.setattr(webhooks.requests, "post", always_boom)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")   # must not raise
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == webhooks._RETRIES
+    assert doc.webhook_status == "failed"
+    assert doc.webhook_detail
+    assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook failed").count() == 1
+
+
+def test_deliver_webhook_success_first_try_no_retry(db_session, monkeypatch):
+    cfg, doc = _wh_seed(db_session)
+    cfg_id, doc_id = cfg.id, doc.id
+    monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
+    calls = {"n": 0}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        calls["n"] += 1
+        return FakeResp()
+
+    monkeypatch.setattr(webhooks.requests, "post", fake_post)
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    doc = db_session.get(Document, doc_id)
+    assert calls["n"] == 1
+    assert doc.webhook_status == "delivered"
+
+
+# ---- /auto-approve admin CRUD + /auto-approve/eval/{type} ----------------
+
+from app import auth
+from app.main import app
+from app.models import User
+
+
+def _as_role(db, role):
+    u = User(email=f"{role}@x.co", password_hash="x", role=role, is_active=True)
+    db.add(u); db.commit()
+    app.dependency_overrides[auth.get_current_user] = lambda: u
+    return u
+
+
+def test_autoapprove_create_list(client, db_session):
+    r = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                            "min_confidence": 0.95})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["document_type"] == "invoice"
+    assert body["enabled"] is False
+    assert body["min_confidence"] == 0.95
+    assert "id" in body and "created_at" in body
+
+    listed = client.get("/auto-approve").json()
+    assert any(c["document_type"] == "invoice" for c in listed)
+
+
+def test_autoapprove_duplicate_type_409(client, db_session):
+    client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.95})
+    dup = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.97})
+    assert dup.status_code == 409
+
+
+def test_autoapprove_floor_validation_422(client, db_session):
+    at_floor = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.9})
+    assert at_floor.status_code == 422
+    below_floor = client.post("/auto-approve", json={"document_type": "invoice", "min_confidence": 0.5})
+    assert below_floor.status_code == 422
+
+
+def test_autoapprove_patch_enable_and_floor(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                              "min_confidence": 0.95}).json()["id"]
+    r = client.patch(f"/auto-approve/{cid}", json={"enabled": True, "min_confidence": 0.98})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["min_confidence"] == 0.98
+
+
+def test_autoapprove_patch_missing_404(client, db_session):
+    assert client.patch("/auto-approve/999999", json={"enabled": True}).status_code == 404
+
+
+def test_autoapprove_delete(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice",
+                                              "min_confidence": 0.95}).json()["id"]
+    assert client.delete(f"/auto-approve/{cid}").status_code == 204
+    assert client.delete(f"/auto-approve/{cid}").status_code == 404
+
+
+def test_autoapprove_enable_logs_via_app_logger(client, db_session, monkeypatch):
+    # Monkeypatch the logger instance directly rather than relying on caplog/stdlib
+    # propagation: alembic's migration tests call command.upgrade(), which loads
+    # alembic.ini via logging.config.fileConfig() and (by default) DISABLES every
+    # pre-existing logger not listed in that ini -- including "aethermind". When the
+    # full suite runs, those migration tests execute before this one in the same
+    # process, so a caplog-based assertion on the "aethermind" logger would be
+    # order-dependent and flaky.
+    from app import main as main_mod
+    calls = []
+    monkeypatch.setattr(main_mod._log, "info", lambda *a, **k: calls.append((a, k)))
+
+    cid = client.post("/auto-approve", json={"document_type": "invoice", "enabled": False,
+                                              "min_confidence": 0.95}).json()["id"]
+    r = client.patch(f"/auto-approve/{cid}", json={"enabled": True})
+    assert r.status_code == 200
+    assert calls and "Auto-approve ENABLED" in calls[0][0][0]
+    assert calls[0][0][1] == "invoice"
+
+
+def test_autoapprove_admin_only(client, db_session):
+    cid = client.post("/auto-approve", json={"document_type": "invoice",
+                                              "min_confidence": 0.95}).json()["id"]
+    _as_role(db_session, "reviewer")
+    try:
+        assert client.get("/auto-approve").status_code == 403
+        assert client.post("/auto-approve", json={"document_type": "x",
+                                                    "min_confidence": 0.95}).status_code == 403
+        assert client.patch(f"/auto-approve/{cid}", json={"enabled": True}).status_code == 403
+        assert client.delete(f"/auto-approve/{cid}").status_code == 403
+        assert client.get("/auto-approve/eval/invoice").status_code == 403
+    finally:
+        app.dependency_overrides.pop(auth.get_current_user, None)
+
+
+def test_autoapprove_eval_endpoint_shape(client, db_session):
+    r = client.get("/auto-approve/eval/invoice")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body, dict)
+    assert set(body.keys()) == {"n", "header", "per_field", "reliability", "grounded_but_wrong"}
+    assert body["n"] == 0
+
+
+# ---- /documents/stats extensions (auto_approved, webhook_failed) ----------------
+
+def test_documents_stats_auto_approved_count(client, db_session):
+    # Create docs with auto_approved=True and False
+    for i in range(3):
+        d = Document(filename=f"auto_{i}.pdf", document_type="invoice", stored_path=f"p{i}",
+                     status="approved", auto_approved=True)
+        db_session.add(d)
+    for i in range(2):
+        d = Document(filename=f"manual_{i}.pdf", document_type="invoice", stored_path=f"pm{i}",
+                     status="approved", auto_approved=False)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 3
+    assert "auto_approved_reopen_rate" in s
+    assert "webhook_failed" in s
+
+
+def test_documents_stats_auto_approved_reopen_rate(client, db_session):
+    # Create auto-approved docs, some reopened
+    for i in range(5):
+        d = Document(filename=f"auto_{i}.pdf", document_type="invoice", stored_path=f"p{i}",
+                     status="approved" if i < 3 else "reopened", auto_approved=True)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 5
+    # 2 reopened out of 5 auto-approved = 2/5 = 0.4
+    assert s["auto_approved_reopen_rate"] == 0.4
+
+
+def test_documents_stats_auto_approved_reopen_rate_none_when_no_auto_docs(client, db_session):
+    # Create only non-auto-approved docs
+    for i in range(3):
+        d = Document(filename=f"manual_{i}.pdf", document_type="invoice", stored_path=f"pm{i}",
+                     status="approved", auto_approved=False)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 0
+    assert s["auto_approved_reopen_rate"] is None
+
+
+def test_documents_stats_webhook_failed_count(client, db_session):
+    # Create docs with webhook_status="failed" and others
+    for i in range(2):
+        d = Document(filename=f"failed_{i}.pdf", document_type="invoice", stored_path=f"pf{i}",
+                     status="approved", webhook_status="failed")
+        db_session.add(d)
+    for i in range(3):
+        d = Document(filename=f"ok_{i}.pdf", document_type="invoice", stored_path=f"po{i}",
+                     status="approved", webhook_status="delivered")
+        db_session.add(d)
+    for i in range(2):
+        d = Document(filename=f"pending_{i}.pdf", document_type="invoice", stored_path=f"pp{i}",
+                     status="approved", webhook_status="pending")
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["webhook_failed"] == 2
+    assert s["total"] == 7
+
+
+def test_documents_list_includes_auto_approved(client, db_session):
+    # Create docs with auto_approved=True and False
+    d1 = Document(filename="auto.pdf", document_type="invoice", stored_path="p1",
+                  status="approved", auto_approved=True)
+    d2 = Document(filename="manual.pdf", document_type="invoice", stored_path="p2",
+                  status="approved", auto_approved=False)
+    db_session.add_all([d1, d2])
+    db_session.commit()
+
+    r = client.get("/documents?limit=10&offset=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert len(body["items"]) == 2
+
+    # Check both items have auto_approved field
+    for item in body["items"]:
+        assert "auto_approved" in item
+
+    # Verify the values match
+    items_by_filename = {item["filename"]: item for item in body["items"]}
+    assert items_by_filename["auto.pdf"]["auto_approved"] is True
+    assert items_by_filename["manual.pdf"]["auto_approved"] is False

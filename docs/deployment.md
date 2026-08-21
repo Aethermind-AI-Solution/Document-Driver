@@ -289,6 +289,18 @@ Reviewers can now pull a finalized document back into review instead of it dead-
 
 **No migration, no new dependencies or environment variables.** (Note: run `alembic upgrade head` on any stale local dev SQLite before running `scripts/eval.py`.)
 
+## A4 / B9 — auto-approve (straight-through processing)
+
+Eligible freshly-processed documents can be finalized as `approved` — with no human — and pushed to the webhook/ERP. It is **off by default** and gated by belt-and-suspenders guardrails.
+
+- **What fires it:** after the pipeline finalizes a document as `processed`, `services.should_auto_approve` returns true only when ALL hold: global `AUTO_APPROVE_ENABLED=true`, an `AutoApproveConfig` row for that document type with `enabled=true`, the doc is not `review_required` (validator-clean, no anomalies), and its `document.confidence` ≥ the type's `min_confidence`. Then it transitions to `approved` via the shared `services.apply_approval` (revision++), stamps it as a **machine** approval (`auto_approved=True`, audit actor is null / "Auto-approved"), and pushes the webhook as `system:auto-approve`.
+- **Guardrails (defense in depth):** global env kill-switch (default off) · per-type opt-in (default off) · confidence floor enforced `>0.9` by the schema · validator-clean + zero-anomaly requirement · machine-vs-human audit distinction · **B11 reopen** as the undo · the admin screen refuses to enable a type without enough golden-set evidence.
+- **Webhook delivery:** `deliver_webhook` retries transient failures (up to 3 attempts, small backoff) and records `Document.webhook_status` (`delivered`/`failed`) + `webhook_detail`; the queue surfaces `webhook_failed` and the auto-approve/reopen-rate tiles.
+- **Admin:** the **Auto-approve** screen (admin-only) configures per-type enable + floor and shows each type's `scripts/eval.py`-derived safety snapshot; `GET /auto-approve/eval/{type}` returns that report.
+- **Config:** `AUTO_APPROVE_ENABLED` (default `false`). Migrations `0007` (`auto_approve_configs`) and `0008` (`Document.webhook_status/webhook_detail/auto_approved`) run via `alembic upgrade head`. No new dependencies.
+
+**Operational prerequisites before enabling any type in prod:** (1) curate a real hand-labeled golden set for that type; (2) run `scripts/eval.py --document-type <type> --golden <fixture>` and confirm the **grounded-but-wrong rate** is acceptably low at your chosen floor; (3) set `min_confidence` well above 0.9; (4) keep curating the golden set — auto-approve blinds you to errors you'd otherwise catch in review (self-blinding loop), so ongoing sampling is mandatory; (5) rely on **B11 reopen** to remediate any bad auto-approval (note: reopening won't retract a webhook already delivered to the ERP — the re-approval carries a higher `revision` for downstream dedup).
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

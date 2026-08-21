@@ -10,11 +10,12 @@ from . import auth, config, mcp_server
 from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
-from .models import AuditLog, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
-from .schemas import DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
-from .services import all_schema_keys, available_schemas, can_transition, log, resolve_review_action, schema_for
+from .models import AuditLog, AutoApproveConfig, Document, ExtractedField, SchemaDefinition, User, WebhookConfig
+from .schemas import AutoApproveCreate, AutoApproveOut, AutoApproveUpdate, DocumentUpdate, LoginRequest, PasswordChange, SchemaEditPayload, SchemaPayload, SuggestedSchemaOut, TokenResponse, UserCreate, UserOut, WebhookCreate, WebhookUpdate, WebhookOut
+from .services import all_schema_keys, apply_approval, available_schemas, can_transition, log, resolve_review_action, schema_for
 from .storage import get_storage
 from .webhooks import deliver_webhook
+from . import eval as eval_mod
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
 config.check_production_config()
@@ -94,7 +95,7 @@ def serialize_summary(d: Document):
     return {"id": d.id, "filename": d.filename, "document_type": d.document_type,
             "upload_date": d.upload_date, "status": d.status, "confidence": d.confidence,
             "review_required": d.review_required, "processing_time": d.processing_time,
-            "anomalies": d.anomalies}
+            "anomalies": d.anomalies, "auto_approved": d.auto_approved}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
@@ -245,8 +246,14 @@ def documents_stats(db: Session = Depends(get_db), _: User = Depends(auth.get_cu
                        .filter(Document.status == "approved").all())
     agreement = round(sum(1 for (e,) in approved_fields if not e) / len(approved_fields), 2) \
         if approved_fields else None
+    auto = db.query(Document).filter(Document.auto_approved.is_(True)).count()
+    auto_reopened = db.query(Document).filter(Document.auto_approved.is_(True),
+                                              Document.status == "reopened").count()
+    webhook_failed = db.query(Document).filter(Document.webhook_status == "failed").count()
     return {"total": total, "review_required": review_required, "avg_processing_time": avg,
-            "field_agreement_rate": agreement}
+            "field_agreement_rate": agreement, "auto_approved": auto,
+            "auto_approved_reopen_rate": round(auto_reopened / auto, 2) if auto else None,
+            "webhook_failed": webhook_failed}
 
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
@@ -284,17 +291,25 @@ def update_document(document_id: int, payload: DocumentUpdate, background_tasks:
             field.edited_by_user = field.field_value != change.field_value
             field.field_value, field.validated = change.field_value, change.validated
     outcome = resolve_review_action(payload.action, payload.reason)
-    if outcome["status"] is not None:
-        if not can_transition(prior_status, outcome["status"]):
-            raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
-        doc.status = outcome["status"]
-    if outcome["review_required"] is not None: doc.review_required = outcome["review_required"]
-    if outcome["status"] == "approved": doc.revision += 1
-    log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
+    if outcome["status"] == "approved":
+        try:
+            apply_approval(db, doc, prior_status, actor=user,
+                           action_label=outcome["log_action"], details=outcome["log_details"])
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+    else:
+        if outcome["status"] is not None:
+            if not can_transition(prior_status, outcome["status"]):
+                raise HTTPException(409, f"Cannot move a document from '{prior_status}' to '{outcome['status']}'")
+            doc.status = outcome["status"]
+        if outcome["review_required"] is not None:
+            doc.review_required = outcome["review_required"]
+        log(db, doc.id, outcome["log_action"], outcome["log_details"], actor=user)
     db.commit(); db.refresh(doc)
     if outcome["status"] == "approved":
         cfg = db.query(WebhookConfig).filter_by(document_type=doc.document_type, active=True).first()
         if cfg:
+            doc.webhook_status = "pending"; db.commit()
             background_tasks.add_task(deliver_webhook, cfg.id, doc.id, user.email)
     return serialize(doc)
 
@@ -339,6 +354,48 @@ def delete_webhook(webhook_id: int, db: Session = Depends(get_db),
     w = db.get(WebhookConfig, webhook_id)
     if not w: raise HTTPException(404, "Webhook not found")
     db.delete(w); db.commit()
+
+def _autoapprove_out(c: AutoApproveConfig) -> dict:
+    return {"id": c.id, "document_type": c.document_type, "enabled": c.enabled,
+            "min_confidence": c.min_confidence, "created_at": c.created_at}
+
+@app.get("/auto-approve", response_model=list[AutoApproveOut])
+def list_auto_approve(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    return [_autoapprove_out(c) for c in db.query(AutoApproveConfig).order_by(AutoApproveConfig.document_type).all()]
+
+@app.post("/auto-approve", status_code=201, response_model=AutoApproveOut)
+def create_auto_approve(payload: AutoApproveCreate, db: Session = Depends(get_db),
+                        _: User = Depends(auth.require_role("admin"))):
+    if db.query(AutoApproveConfig).filter_by(document_type=payload.document_type).first():
+        raise HTTPException(409, "An auto-approve config for that document type already exists")
+    c = AutoApproveConfig(**payload.model_dump()); db.add(c); db.commit(); db.refresh(c)
+    return _autoapprove_out(c)
+
+@app.patch("/auto-approve/{config_id}", response_model=AutoApproveOut)
+def update_auto_approve(config_id: int, payload: AutoApproveUpdate, db: Session = Depends(get_db),
+                        user: User = Depends(auth.require_role("admin"))):
+    c = db.get(AutoApproveConfig, config_id)
+    if not c: raise HTTPException(404, "Auto-approve config not found")
+    was_enabled = c.enabled
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(c, k, v)
+    if not was_enabled and c.enabled:
+        _log.info("Auto-approve ENABLED for %s (floor %.2f) by %s",
+                  c.document_type, c.min_confidence, user.email)
+    db.commit(); db.refresh(c)
+    return _autoapprove_out(c)
+
+@app.delete("/auto-approve/{config_id}", status_code=204)
+def delete_auto_approve(config_id: int, db: Session = Depends(get_db),
+                        _: User = Depends(auth.require_role("admin"))):
+    c = db.get(AutoApproveConfig, config_id)
+    if not c: raise HTTPException(404, "Auto-approve config not found")
+    db.delete(c); db.commit()
+
+@app.get("/auto-approve/eval/{document_type}")
+def auto_approve_eval(document_type: str, db: Session = Depends(get_db),
+                      _: User = Depends(auth.require_role("admin"))):
+    return eval_mod.build_report(eval_mod.correction_records(db, document_type))
 
 def mount_mcp(app) -> bool:
     """Mount the MCP server at /mcp only when a token is configured."""

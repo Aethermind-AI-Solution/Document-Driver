@@ -1,6 +1,7 @@
 import hmac
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from hashlib import sha256
 import requests
@@ -9,6 +10,9 @@ from .models import Document, WebhookConfig
 from .services import log
 
 _log = logging.getLogger("aethermind")
+
+_RETRIES = 3
+_RETRY_BACKOFF = 0.2
 
 
 def build_payload(doc: Document, approved_by: str) -> dict:
@@ -39,14 +43,26 @@ def deliver_webhook(config_id: int, document_id: int, approved_by: str) -> None:
         headers = {"Content-Type": "application/json"}
         if cfg.secret:
             headers["X-Aethermind-Signature"] = sign(body, cfg.secret)
-        try:
-            resp = requests.post(cfg.url, data=body, headers=headers, timeout=10)
-            if 200 <= resp.status_code < 300:
-                log(db, doc.id, "Webhook delivered", f"{cfg.url} ({resp.status_code})")
-            else:
-                log(db, doc.id, "Webhook failed", f"{cfg.url} -> HTTP {resp.status_code}")
-        except Exception as exc:
-            log(db, doc.id, "Webhook failed", f"{cfg.url} -> {type(exc).__name__}: {exc}")
+        delivered = False
+        reason = None
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                resp = requests.post(cfg.url, data=body, headers=headers, timeout=10)
+                if 200 <= resp.status_code < 300:
+                    doc.webhook_status = "delivered"
+                    doc.webhook_detail = f"{cfg.url} ({resp.status_code})"
+                    log(db, doc.id, "Webhook delivered", doc.webhook_detail)
+                    delivered = True
+                    break
+                reason = f"{cfg.url} -> HTTP {resp.status_code}"
+            except Exception as exc:
+                reason = f"{cfg.url} -> {type(exc).__name__}: {exc}"
+            if attempt < _RETRIES:
+                time.sleep(_RETRY_BACKOFF * attempt)
+        if not delivered:
+            doc.webhook_status = "failed"
+            doc.webhook_detail = reason
+            log(db, doc.id, "Webhook failed", reason)
         db.commit()
     except Exception:
         _log.exception("deliver_webhook error for config %s / doc %s", config_id, document_id)
