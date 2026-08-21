@@ -95,7 +95,7 @@ def serialize_summary(d: Document):
     return {"id": d.id, "filename": d.filename, "document_type": d.document_type,
             "upload_date": d.upload_date, "status": d.status, "confidence": d.confidence,
             "review_required": d.review_required, "processing_time": d.processing_time,
-            "anomalies": d.anomalies}
+            "anomalies": d.anomalies, "auto_approved": d.auto_approved}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
@@ -246,8 +246,14 @@ def documents_stats(db: Session = Depends(get_db), _: User = Depends(auth.get_cu
                        .filter(Document.status == "approved").all())
     agreement = round(sum(1 for (e,) in approved_fields if not e) / len(approved_fields), 2) \
         if approved_fields else None
+    auto = db.query(Document).filter(Document.auto_approved.is_(True)).count()
+    auto_reopened = db.query(Document).filter(Document.auto_approved.is_(True),
+                                              Document.status == "reopened").count()
+    webhook_failed = db.query(Document).filter(Document.webhook_status == "failed").count()
     return {"total": total, "review_required": review_required, "avg_processing_time": avg,
-            "field_agreement_rate": agreement}
+            "field_agreement_rate": agreement, "auto_approved": auto,
+            "auto_approved_reopen_rate": round(auto_reopened / auto, 2) if auto else None,
+            "webhook_failed": webhook_failed}
 
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):

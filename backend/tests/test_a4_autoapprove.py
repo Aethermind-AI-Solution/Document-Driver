@@ -371,3 +371,96 @@ def test_autoapprove_eval_endpoint_shape(client, db_session):
     assert isinstance(body, dict)
     assert set(body.keys()) == {"n", "header", "per_field", "reliability", "grounded_but_wrong"}
     assert body["n"] == 0
+
+
+# ---- /documents/stats extensions (auto_approved, webhook_failed) ----------------
+
+def test_documents_stats_auto_approved_count(client, db_session):
+    # Create docs with auto_approved=True and False
+    for i in range(3):
+        d = Document(filename=f"auto_{i}.pdf", document_type="invoice", stored_path=f"p{i}",
+                     status="approved", auto_approved=True)
+        db_session.add(d)
+    for i in range(2):
+        d = Document(filename=f"manual_{i}.pdf", document_type="invoice", stored_path=f"pm{i}",
+                     status="approved", auto_approved=False)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 3
+    assert "auto_approved_reopen_rate" in s
+    assert "webhook_failed" in s
+
+
+def test_documents_stats_auto_approved_reopen_rate(client, db_session):
+    # Create auto-approved docs, some reopened
+    for i in range(5):
+        d = Document(filename=f"auto_{i}.pdf", document_type="invoice", stored_path=f"p{i}",
+                     status="approved" if i < 3 else "reopened", auto_approved=True)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 5
+    # 2 reopened out of 5 auto-approved = 2/5 = 0.4
+    assert s["auto_approved_reopen_rate"] == 0.4
+
+
+def test_documents_stats_auto_approved_reopen_rate_none_when_no_auto_docs(client, db_session):
+    # Create only non-auto-approved docs
+    for i in range(3):
+        d = Document(filename=f"manual_{i}.pdf", document_type="invoice", stored_path=f"pm{i}",
+                     status="approved", auto_approved=False)
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["auto_approved"] == 0
+    assert s["auto_approved_reopen_rate"] is None
+
+
+def test_documents_stats_webhook_failed_count(client, db_session):
+    # Create docs with webhook_status="failed" and others
+    for i in range(2):
+        d = Document(filename=f"failed_{i}.pdf", document_type="invoice", stored_path=f"pf{i}",
+                     status="approved", webhook_status="failed")
+        db_session.add(d)
+    for i in range(3):
+        d = Document(filename=f"ok_{i}.pdf", document_type="invoice", stored_path=f"po{i}",
+                     status="approved", webhook_status="delivered")
+        db_session.add(d)
+    for i in range(2):
+        d = Document(filename=f"pending_{i}.pdf", document_type="invoice", stored_path=f"pp{i}",
+                     status="approved", webhook_status="pending")
+        db_session.add(d)
+    db_session.commit()
+
+    s = client.get("/documents/stats").json()
+    assert s["webhook_failed"] == 2
+    assert s["total"] == 7
+
+
+def test_documents_list_includes_auto_approved(client, db_session):
+    # Create docs with auto_approved=True and False
+    d1 = Document(filename="auto.pdf", document_type="invoice", stored_path="p1",
+                  status="approved", auto_approved=True)
+    d2 = Document(filename="manual.pdf", document_type="invoice", stored_path="p2",
+                  status="approved", auto_approved=False)
+    db_session.add_all([d1, d2])
+    db_session.commit()
+
+    r = client.get("/documents?limit=10&offset=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2
+    assert len(body["items"]) == 2
+
+    # Check both items have auto_approved field
+    for item in body["items"]:
+        assert "auto_approved" in item
+
+    # Verify the values match
+    items_by_filename = {item["filename"]: item for item in body["items"]}
+    assert items_by_filename["auto.pdf"]["auto_approved"] is True
+    assert items_by_filename["manual.pdf"]["auto_approved"] is False
