@@ -301,6 +301,16 @@ Eligible freshly-processed documents can be finalized as `approved` — with no 
 
 **Operational prerequisites before enabling any type in prod:** (1) curate a real hand-labeled golden set for that type; (2) run `scripts/eval.py --document-type <type> --golden <fixture>` and confirm the **grounded-but-wrong rate** is acceptably low at your chosen floor; (3) set `min_confidence` well above 0.9; (4) keep curating the golden set — auto-approve blinds you to errors you'd otherwise catch in review (self-blinding loop), so ongoing sampling is mandatory; (5) rely on **B11 reopen** to remediate any bad auto-approval (note: reopening won't retract a webhook already delivered to the ERP — the re-approval carries a higher `revision` for downstream dedup).
 
+## A5 — observability (lite)
+
+Operational visibility for running the engine, computed entirely from existing data (no new tables, no external monitoring stack).
+
+- **Structured logging:** application logs are emitted as one-line JSON by default (`LOG_FORMAT=json`) with correlation fields (`document_id`, `stage`, `latency_ms`, `actor`, `status`) attached at the high-value points (pipeline complete/failed, auto-approve, webhook delivery). Set `LOG_FORMAT=plain` for human-readable local logs. On Render, the JSON lines are greppable/queryable in the log stream.
+- **Ops metrics:** admin-only `GET /admin/metrics` returns `status_counts` (docs per status), `errors_recent` (last 10 `error` docs with their "Processing failed" detail), `stuck_processing` (docs stuck in `processing` longer than `STUCK_PROCESSING_MINUTES`), and `stage_latency` (per-pipeline-stage p50/p95 in ms, computed from the stored `pipeline_trace` of the most recent `METRICS_RECENT_N` docs). `/health` (liveness) is unchanged.
+- **System Health screen:** an admin-only **Health** screen renders the above with a red/amber/green flag banner. The **stuck-processing** view surfaces the known "`reset_stuck_processing` only runs on app startup" gap on the Render free tier (a doc from a dropped BackgroundTask sits stuck until the next cold start) — watch it there.
+- **Config:** `LOG_FORMAT` (default `json`), `STUCK_PROCESSING_MINUTES` (default 15), `METRICS_RECENT_N` (default 200). No migration, no new dependencies.
+- **Not included (remains full B15, later):** external alerting (email/Slack), a Prometheus/Grafana scrape stack, and time-series history — the Health screen surfaces current state + visual flags only.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

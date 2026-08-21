@@ -1,4 +1,5 @@
 import time
+import logging
 from pathlib import Path
 from dataclasses import asdict
 from sqlalchemy.orm import Session
@@ -12,6 +13,8 @@ from .extractor import ExtractorAgent
 from .reconciler import ReconcilerAgent
 from .validator import ValidatorAgent
 
+_log = logging.getLogger("aethermind")
+
 STAGES = [ClassifierAgent, ExtractorAgent, ReconcilerAgent, ValidatorAgent]
 
 
@@ -21,6 +24,8 @@ def _maybe_auto_approve(db: Session, document: Document) -> None:
     services.apply_approval(db, document, prior_status=document.status, actor=None,
                             action_label="Auto-approved",
                             details=f"confidence {document.confidence:.2f} >= floor; validator-clean, no anomalies")
+    _log.info("document auto-approved", extra={"document_id": document.id,
+                                               "actor": "system:auto-approve"})
     document.auto_approved = True
     cfg_w = db.query(WebhookConfig).filter_by(document_type=document.document_type, active=True).first()
     if cfg_w:
@@ -59,8 +64,12 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
                      f"Applied {document.document_type} schema", actor=actor)
         db.commit(); db.refresh(document)
         _maybe_auto_approve(db, document)
+        _log.info("pipeline complete", extra={"document_id": document.id, "stage": "pipeline",
+                                              "latency_ms": int((document.processing_time or 0) * 1000),
+                                              "status": document.status})
         return document
     except Exception as exc:
         document.status = "error"
         services.log(db, document.id, "Processing failed", str(exc), actor=actor)
+        _log.error("pipeline failed", extra={"document_id": document.id, "stage": "pipeline"}, exc_info=True)
         db.commit(); raise
