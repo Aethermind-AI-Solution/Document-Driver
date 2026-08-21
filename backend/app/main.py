@@ -1,5 +1,5 @@
-import csv, io, json, logging, shutil
-from datetime import datetime, timezone
+import csv, io, json, logging, math, shutil
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -257,6 +257,60 @@ def documents_stats(db: Session = Depends(get_db), _: User = Depends(auth.get_cu
             "field_agreement_rate": agreement, "auto_approved": auto,
             "auto_approved_reopen_rate": round(auto_reopened / auto, 2) if auto else None,
             "webhook_failed": webhook_failed}
+
+
+def _percentile(values: list[int], p: float):
+    if not values:
+        return None
+    s = sorted(values)
+    k = max(1, math.ceil(p / 100 * len(s)))
+    return s[k - 1]
+
+
+@app.get("/admin/metrics")
+def admin_metrics(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    statuses = ["uploaded", "processing", "processed", "review_required",
+                "approved", "rejected", "reopened", "error"]
+    status_counts = {s: db.query(Document).filter(Document.status == s).count() for s in statuses}
+
+    err_docs = (db.query(Document).filter(Document.status == "error")
+                .order_by(Document.upload_date.desc()).limit(10).all())
+    errors_recent = []
+    for d in err_docs:
+        a = (db.query(AuditLog).filter(AuditLog.document_id == d.id, AuditLog.action == "Processing failed")
+             .order_by(AuditLog.timestamp.desc()).first())
+        errors_recent.append({"id": d.id, "filename": d.filename, "document_type": d.document_type,
+                              "detail": a.details if a else None,
+                              "timestamp": (a.timestamp if a else d.upload_date)})
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=config.STUCK_PROCESSING_MINUTES)
+    stuck = []
+    for d in db.query(Document).filter(Document.status == "processing").all():
+        ud = d.upload_date
+        if ud is not None and ud.tzinfo is None:
+            ud = ud.replace(tzinfo=timezone.utc)
+        if ud is not None and ud < cutoff:
+            stuck.append({"id": d.id, "filename": d.filename,
+                          "minutes": int((now - ud).total_seconds() // 60)})
+
+    recent = (db.query(Document).filter(Document.pipeline_trace.isnot(None))
+              .order_by(Document.upload_date.desc()).limit(config.METRICS_RECENT_N).all())
+    by_stage: dict[str, list[int]] = {}
+    for d in recent:
+        try:
+            for s in (d.pipeline_trace or []):
+                if s.get("duration_ms") is not None:
+                    by_stage.setdefault(s["name"], []).append(s["duration_ms"])
+        except Exception:
+            continue
+    stage_latency = [{"stage": name, "p50_ms": _percentile(v, 50), "p95_ms": _percentile(v, 95), "n": len(v)}
+                     for name, v in by_stage.items()]
+
+    return {"status_counts": status_counts, "errors_recent": errors_recent,
+            "stuck_processing": {"threshold_minutes": config.STUCK_PROCESSING_MINUTES,
+                                 "count": len(stuck), "documents": stuck},
+            "stage_latency": stage_latency, "sample_size": config.METRICS_RECENT_N}
 
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):

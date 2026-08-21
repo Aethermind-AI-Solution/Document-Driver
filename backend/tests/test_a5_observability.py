@@ -43,7 +43,7 @@ def test_configure_logging_plain(monkeypatch):
 
 import logging as _logging
 from app.agents import pipeline
-from app.models import Document, AutoApproveConfig
+from app.models import Document, AutoApproveConfig, User
 from app import config as _config, services
 
 
@@ -95,3 +95,55 @@ def test_auto_approve_emits_structured_log(db_session, monkeypatch):
     hit = [r for r in cap.records if getattr(r, "document_id", None) == doc.id
            and "auto" in r.getMessage().lower()]
     assert hit, f"expected a structured auto-approve log record carrying document_id. Got {len(cap.records)} records: {[r.getMessage() for r in cap.records]}"
+
+
+from datetime import datetime, timezone, timedelta
+from app.models import AuditLog
+
+
+def test_percentile():
+    from app.main import _percentile
+    assert _percentile([], 50) is None
+    assert _percentile([10], 95) == 10
+    assert _percentile([10, 20, 30, 40], 50) == 20      # nearest-rank
+    assert _percentile([10, 20, 30, 40], 95) == 40
+
+
+def test_admin_metrics_shape_and_admin_only(client, db_session):
+    # seed a mix of statuses
+    for st in ["processed", "approved", "error", "review_required"]:
+        db_session.add(Document(filename=f"{st}.pdf", document_type="invoice", stored_path="p", status=st))
+    db_session.commit()
+    err = db_session.query(Document).filter_by(status="error").first()
+    db_session.add(AuditLog(document_id=err.id, action="Processing failed", details="boom"))
+    # a stuck processing doc (old upload_date) + a fresh one
+    old = Document(filename="stuck.pdf", document_type="invoice", stored_path="p", status="processing",
+                   upload_date=datetime.now(timezone.utc) - timedelta(hours=2))
+    fresh = Document(filename="fresh.pdf", document_type="invoice", stored_path="p", status="processing",
+                     upload_date=datetime.now(timezone.utc))
+    # a doc with a pipeline_trace for latency
+    traced = Document(filename="t.pdf", document_type="invoice", stored_path="p", status="processed",
+                      pipeline_trace=[{"name": "Classifier", "status": "ok", "detail": "", "duration_ms": 100},
+                                      {"name": "Extractor", "status": "ok", "detail": "", "duration_ms": 300}])
+    db_session.add_all([old, fresh, traced]); db_session.commit()
+
+    r = client.get("/admin/metrics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status_counts"]["error"] == 1 and body["status_counts"]["processing"] == 2
+    assert any(e["detail"] == "boom" for e in body["errors_recent"])
+    assert body["stuck_processing"]["count"] == 1                       # only the 2h-old one
+    stages = {s["stage"]: s for s in body["stage_latency"]}
+    assert stages["Classifier"]["p50_ms"] == 100 and stages["Extractor"]["n"] == 1
+
+
+def test_admin_metrics_forbidden_for_reviewer(client, db_session, monkeypatch):
+    from app import auth
+    import app.main as main_mod
+    rev = User(email="rev@t.local", password_hash="x", role="reviewer", is_active=True)
+    db_session.add(rev); db_session.commit()
+    main_mod.app.dependency_overrides[auth.get_current_user] = lambda: rev
+    try:
+        assert client.get("/admin/metrics").status_code == 403
+    finally:
+        main_mod.app.dependency_overrides.pop(auth.get_current_user, None)
