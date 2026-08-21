@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
 from . import auth, config, mcp_server
+from .logging_config import configure_logging
 from .security import rate_limit
 from .database import Base, engine, get_db
 from .jobs import run_pipeline_task, reset_stuck_processing
@@ -23,6 +24,8 @@ config.check_production_config()
 # Tests/dev create the schema directly; prod runs Alembic migrations on deploy.
 if config.DATABASE_URL.startswith("sqlite"):
     Base.metadata.create_all(bind=engine)
+
+configure_logging()
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
 _log = logging.getLogger("aethermind")
 

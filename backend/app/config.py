@@ -48,6 +48,9 @@ LEARNING_MAX_HINTS_PER_FIELD = int(os.getenv("LEARNING_MAX_HINTS_PER_FIELD", "3"
 LEARNING_MAX_HINTS = int(os.getenv("LEARNING_MAX_HINTS", "20"))
 SCHEMA_AUTHOR_ENABLED = os.getenv("SCHEMA_AUTHOR_ENABLED", "true").lower() in ("1", "true", "yes")
 AUTO_APPROVE_ENABLED = os.getenv("AUTO_APPROVE_ENABLED", "false").lower() in ("1", "true", "yes")
+LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
+STUCK_PROCESSING_MINUTES = int(os.getenv("STUCK_PROCESSING_MINUTES", "15"))
+METRICS_RECENT_N = int(os.getenv("METRICS_RECENT_N", "200"))
 
 
 def check_production_config():
