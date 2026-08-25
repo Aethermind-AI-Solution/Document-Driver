@@ -29,6 +29,39 @@ configure_logging()
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
 _log = logging.getLogger("aethermind")
 
+# Sets org context for the whole request. FastAPI runs each sync dependency
+# (e.g. auth.get_current_user) AND the endpoint body via separate
+# run_in_threadpool calls, each with its own copied context — a ContextVar set
+# inside get_current_user does NOT reach the sibling get_db dependency or the
+# endpoint. An ASGI middleware's call_next, however, runs in the request's own
+# Task context, so a ContextVar.set() here IS inherited by every downstream
+# run_in_threadpool call. Registered BEFORE _surface_errors/CORS below so it
+# ends up innermost (closest to the router) — if the endpoint raises, the
+# exception still propagates up through this middleware's try/finally to
+# _surface_errors (caught there) and out through CORS (headers added there).
+@app.middleware("http")
+async def _org_context_mw(request: Request, call_next):
+    from .context import set_current_org, reset_org
+    org_id = None
+    auth_h = request.headers.get("authorization", "")
+    if auth_h.startswith("Bearer "):
+        try:
+            claims = auth.decode_token(auth_h.removeprefix("Bearer ").strip())
+            org_id = claims.get("org_id")
+        except Exception:
+            org_id = None
+    if org_id is None:
+        # No/invalid token: leave ambient context untouched. Unauthenticated
+        # endpoints (e.g. /auth/login) use skip_org_filter; protected endpoints
+        # will 401 in get_current_user before any tenant-scoped query runs; in
+        # tests the autouse fixture's org-1 context is left intact.
+        return await call_next(request)
+    token = set_current_org(org_id)
+    try:
+        return await call_next(request)
+    finally:
+        reset_org(token)
+
 # Catch-all so an unexpected error becomes a real JSON 500 that flows back OUT
 # through the CORS middleware below. Registered BEFORE CORSMiddleware so CORS is
 # the outer layer — otherwise Starlette's default 500 skips CORS and the browser
