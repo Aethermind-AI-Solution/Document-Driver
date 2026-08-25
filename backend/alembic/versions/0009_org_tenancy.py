@@ -32,13 +32,20 @@ def upgrade() -> None:
     for t in TENANT_TABLES:
         op.execute(f"UPDATE {t} SET org_id = 1 WHERE org_id IS NULL")
     # swap global uniques -> composite (org_id, ...). The original `key` unique
-    # constraint was created unnamed (sa.UniqueConstraint("key")), so SQLite
-    # reflects it with name=None; apply a naming_convention during batch reflection
-    # so it gets a deterministic name we can drop by. NOTE: pin real Postgres
-    # names before prod (Postgres would have auto-named it schema_definitions_key_key).
-    with op.batch_alter_table("schema_definitions", schema=None,
-                               naming_convention={"uq": "uq_%(table_name)s_%(column_0_name)s"}) as b:
-        b.drop_constraint("uq_schema_definitions_key", type_="unique")
+    # constraint was created unnamed (sa.UniqueConstraint("key")) in 0001_initial,
+    # so its reflected name differs by backend: SQLite reflects it as name=None,
+    # while Postgres auto-names it `schema_definitions_key_key`. Batch mode only
+    # rewrites the whole table (and thus tolerates unnamed constraints) on SQLite;
+    # on Postgres it ALTERs in place and needs the real constraint name. Reflect
+    # the actual name at runtime so this works portably on both backends.
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    key_uqs = [uc["name"] for uc in insp.get_unique_constraints("schema_definitions")
+               if uc["column_names"] == ["key"]]
+    with op.batch_alter_table("schema_definitions", schema=None) as b:
+        for name in key_uqs:
+            if name:
+                b.drop_constraint(name, type_="unique")
         b.create_unique_constraint("uq_schema_definitions_org_id_key", ["org_id", "key"])
     with op.batch_alter_table("webhook_configs", schema=None) as b:
         b.drop_index("ix_webhook_configs_document_type")
