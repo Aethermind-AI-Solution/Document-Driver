@@ -35,17 +35,22 @@ def db_session(tmp_path):
 def client(db_session):
     """Existing endpoint tests run authenticated as an admin unless a test
     overrides get_current_user itself."""
-    from app.context import set_current_org, reset_org
+    from app.context import set_current_org
     admin = User(email="admin@test.local", password_hash="x", role="admin", is_active=True, org_id=1)
     db_session.add(admin)
     db_session.commit()
-    app.dependency_overrides[auth.get_current_user] = lambda: admin
-    org_token = set_current_org(admin.org_id)
+
+    def _override_current_user():
+        # set org context per-request (the request runs in its own context), so
+        # the fail-closed loader-criteria has an org during endpoint DB queries.
+        set_current_org(admin.org_id)
+        return admin
+
+    app.dependency_overrides[auth.get_current_user] = _override_current_user
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(auth.get_current_user, None)
-        reset_org(org_token)
 
 
 from app.security import rate_limiter
@@ -58,3 +63,15 @@ def _reset_rate_limiter():
     rate_limiter.reset()
     yield
     rate_limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _default_org_context():
+    """Set a default org context (org 1) for every test, so direct-call unit
+    tests (pipeline/jobs/services/mcp) have an org once the fail-closed
+    loader-criteria goes live. A test that needs to exercise the unset/raise
+    path resets it explicitly (context.set_current_org(None))."""
+    from app import context
+    token = context.set_current_org(1)
+    yield
+    context.reset_org(token)

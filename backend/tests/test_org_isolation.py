@@ -65,24 +65,22 @@ def test_upload_audit_log_stamped_from_context(client, db_session):
 
 
 def test_log_stamps_org_id_from_context(db_session):
-    """Direct unit test of services.log(): stamps whatever org_id is active in
-    context at call time, and reverts cleanly once the context is reset."""
-    from app.context import set_current_org, reset_org, current_org_id
+    """services.log() stamps whatever org_id is active in context at call time.
+    (Self-contained: sets context explicitly rather than assuming a default; the
+    autouse fixture handles reset. Queries with skip_org_filter so it holds once
+    the fail-closed loader-criteria is live.)"""
+    from app.context import set_current_org
     from app.models import Document, AuditLog
     from app.services import log
-    doc = Document(filename="x.pdf", document_type="invoice", stored_path="x")
+    doc = Document(filename="x.pdf", document_type="invoice", stored_path="x", org_id=42)
     db_session.add(doc); db_session.commit(); db_session.refresh(doc)
 
-    assert current_org_id() is None          # unset by default
-    token = set_current_org(42)
-    try:
-        log(db_session, doc.id, "Uploaded", "unit test", actor=None)
-        db_session.commit()
-    finally:
-        reset_org(token)
-    assert current_org_id() is None           # context restored
+    set_current_org(42)
+    log(db_session, doc.id, "Uploaded", "unit test", actor=None)
+    db_session.commit()
 
-    entry = db_session.query(AuditLog).filter_by(document_id=doc.id, action="Uploaded").one()
+    entry = (db_session.query(AuditLog).filter_by(document_id=doc.id, action="Uploaded")
+             .execution_options(skip_org_filter=True).one())
     assert entry.org_id == 42
 
 
