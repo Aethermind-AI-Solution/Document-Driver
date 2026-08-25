@@ -76,6 +76,11 @@ Effort: XS (<½d) · S (≤1d) · M (1–3d) · L (>3d).
 - **B11** Reopen/rework + re-process after edits `M`
 - **B12** Batch/bulk upload + pagination + delete/archive `M`
 
+## Enterprise track (in progress)
+
+- ✅ **Org tenant isolation** Shipped (2026-08-25, `feat/org-tenant-isolation`) — strict multi-tenant isolation: `Organization` model + `org_id` on every tenant table, **fail-closed** `with_loader_criteria` scoping (covers `.query()`/`Session.get()`/lazy loads), org context set in an `@app.middleware("http")` from the JWT `org_id` claim, migrations `0009`/`0010` (backfill existing data to `DEFAULT_ORG_ID`, composite per-org uniques). Proven by a real-token two-org isolation matrix. No cross-org superadmin (roles are org-scoped). **Fast-follows:** MCP per-token org binding (before enabling MCP for a 2nd org); self-serve org onboarding UI; the `_TenantMixin` write-side context-default (a footgun for future call sites that omit `org_id`).
+- Remaining enterprise work: **B13** retention/deletion + encryption-at-rest + PII redaction; SSO; the auto-approve server-side golden-set-n enforcement fast-follow.
+
 ## Phase 6 — Enterprise readiness
 *Goal: unlock regulated buyers and operate at scale.*
 - **B13** Compliance layer — encryption at rest, retention, PII redaction `L`

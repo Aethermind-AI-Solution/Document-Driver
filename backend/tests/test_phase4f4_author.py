@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.database import Base
-from app.models import SchemaDefinition, AuditLog, Document
+from app.models import SchemaDefinition, AuditLog, Document, Organization
 from app.agents import schema_author
 
 
@@ -77,12 +77,14 @@ def test_persist_suggested_creates_row_and_audit(tmp_path):
                            connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
-    doc = Document(filename="a.pdf", document_type="unknown", stored_path="a", status="processing")
+    org = Organization(name="Test Org")
+    db.add(org); db.commit(); db.refresh(org)
+    doc = Document(filename="a.pdf", document_type="unknown", stored_path="a", status="processing", org_id=org.id)
     db.add(doc); db.commit(); db.refresh(doc)
     proposal = {"key": "manifest", "name": "Manifest",
                 "fields": [{"name": "a", "label": "A", "type": "string", "required": False}]}
-    row = schema_author.persist_suggested(db, proposal, doc.id)
+    row = schema_author.persist_suggested(db, proposal, doc.id, org_id=org.id)
     db.commit()
-    assert row.id and row.status == "suggested" and row.origin_document_id == doc.id
+    assert row.id and row.status == "suggested" and row.origin_document_id == doc.id and row.org_id == org.id
     assert db.query(AuditLog).filter_by(action="Schema suggested").count() == 1
     db.close()

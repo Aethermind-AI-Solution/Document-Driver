@@ -25,9 +25,11 @@ def can_transition(current: str, target: str) -> bool:
 
 
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
+    from .context import current_org_id
     db.add(AuditLog(document_id=document_id, action=action, details=details,
                     actor_id=getattr(actor, "id", None),
-                    actor_email=getattr(actor, "email", None)))
+                    actor_email=getattr(actor, "email", None),
+                    org_id=current_org_id()))
 
 def apply_approval(db: Session, document, prior_status: str, actor,
                    action_label: str = "Approved", details: str = "") -> None:
@@ -278,20 +280,30 @@ def process_document(db: Session, document: Document, actor=None) -> Document:
     from .agents.pipeline import run_pipeline
     return asyncio.run(run_pipeline(db, document, document.document_type, actor))
 
-def create_user(db: Session, email: str, password: str, role: str) -> User:
-    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)
+def create_user(db: Session, email: str, password: str, role: str, org_id: int | None = None) -> User:
+    from .config import DEFAULT_ORG_ID
+    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True,
+                org_id=org_id if org_id is not None else DEFAULT_ORG_ID)
     db.add(user); db.commit(); db.refresh(user)
     return user
 
 def bootstrap_admin(db: Session) -> None:
-    from .config import ADMIN_EMAIL, ADMIN_PASSWORD
+    from .config import ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_ORG_ID
+    from .models import Organization
+    from .context import set_current_org, reset_org
     if not (ADMIN_EMAIL and ADMIN_PASSWORD):
         return
-    if db.query(User).count() > 0:
-        return
-    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")
+    token = set_current_org(DEFAULT_ORG_ID)
+    try:
+        if db.get(Organization, DEFAULT_ORG_ID) is None:
+            db.add(Organization(id=DEFAULT_ORG_ID, name="Default Organization")); db.commit()
+        if db.query(User).filter_by(org_id=DEFAULT_ORG_ID).count() > 0:
+            return
+        create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin", org_id=DEFAULT_ORG_ID)
+    finally:
+        reset_org(token)
 
-def get_correction_hints(db: Session, document_type: str, fields: list[dict]) -> dict:
+def get_correction_hints(db: Session, org_id: int | None, document_type: str, fields: list[dict]) -> dict:
     """Recent human corrections on APPROVED docs of this type →
     {field_name: [(original_value, corrected_value), ...]}. Bounded, deduped;
     {} on cold-start or any error (never breaks extraction)."""
@@ -299,7 +311,8 @@ def get_correction_hints(db: Session, document_type: str, fields: list[dict]) ->
         names = {f["name"] for f in fields}
         rows = (db.query(ExtractedField.field_name, ExtractedField.original_value, ExtractedField.field_value)
                 .join(Document, ExtractedField.document_id == Document.id)
-                .filter(Document.document_type == document_type,
+                .filter(Document.org_id == org_id,
+                        Document.document_type == document_type,
                         Document.status == "approved",
                         ExtractedField.edited_by_user.is_(True),
                         ExtractedField.original_value.isnot(None),

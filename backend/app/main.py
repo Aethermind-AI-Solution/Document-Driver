@@ -29,6 +29,39 @@ configure_logging()
 app = FastAPI(title="Document Intelligence Engine", version="1.0.0")
 _log = logging.getLogger("aethermind")
 
+# Sets org context for the whole request. FastAPI runs each sync dependency
+# (e.g. auth.get_current_user) AND the endpoint body via separate
+# run_in_threadpool calls, each with its own copied context — a ContextVar set
+# inside get_current_user does NOT reach the sibling get_db dependency or the
+# endpoint. An ASGI middleware's call_next, however, runs in the request's own
+# Task context, so a ContextVar.set() here IS inherited by every downstream
+# run_in_threadpool call. Registered BEFORE _surface_errors/CORS below so it
+# ends up innermost (closest to the router) — if the endpoint raises, the
+# exception still propagates up through this middleware's try/finally to
+# _surface_errors (caught there) and out through CORS (headers added there).
+@app.middleware("http")
+async def _org_context_mw(request: Request, call_next):
+    from .context import set_current_org, reset_org
+    org_id = None
+    auth_h = request.headers.get("authorization", "")
+    if auth_h.startswith("Bearer "):
+        try:
+            claims = auth.decode_token(auth_h.removeprefix("Bearer ").strip())
+            org_id = claims.get("org_id")
+        except Exception:
+            org_id = None
+    if org_id is None:
+        # No/invalid token: leave ambient context untouched. Unauthenticated
+        # endpoints (e.g. /auth/login) use skip_org_filter; protected endpoints
+        # will 401 in get_current_user before any tenant-scoped query runs; in
+        # tests the autouse fixture's org-1 context is left intact.
+        return await call_next(request)
+    token = set_current_org(org_id)
+    try:
+        return await call_next(request)
+    finally:
+        reset_org(token)
+
 # Catch-all so an unexpected error becomes a real JSON 500 that flows back OUT
 # through the CORS middleware below. Registered BEFORE CORSMiddleware so CORS is
 # the outer layer — otherwise Starlette's default 500 skips CORS and the browser
@@ -105,7 +138,7 @@ def health(): return {"status":"ok"}
 
 @app.post("/auth/login", response_model=TokenResponse, dependencies=[Depends(rate_limit)])
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter_by(email=payload.email).first()
+    user = db.query(User).filter_by(email=payload.email).execution_options(skip_org_filter=True).first()
     if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "Invalid email or password")
     return {"access_token": auth.create_access_token(user), "token_type": "bearer",
@@ -130,11 +163,11 @@ def list_users(db: Session = Depends(get_db), _: User = Depends(auth.require_rol
 
 @app.post("/users", status_code=201, response_model=UserOut)
 def create_user_endpoint(payload: UserCreate, db: Session = Depends(get_db),
-                         _: User = Depends(auth.require_role("admin"))):
-    if db.query(User).filter_by(email=payload.email).first():
+                         user: User = Depends(auth.require_role("admin"))):
+    if db.query(User).filter_by(email=payload.email).execution_options(skip_org_filter=True).first():
         raise HTTPException(409, "Email already exists")
     from .services import create_user
-    u = create_user(db, payload.email, payload.password, payload.role)
+    u = create_user(db, payload.email, payload.password, payload.role, org_id=user.org_id)
     return {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active}
 
 @app.patch("/users/{user_id}", response_model=UserOut)
@@ -154,9 +187,9 @@ def list_schemas(db: Session = Depends(get_db), _: User = Depends(auth.get_curre
 
 @app.post("/schemas", status_code=201)
 def create_schema(payload: SchemaPayload, db: Session = Depends(get_db),
-                  _: User = Depends(auth.require_role("admin"))):
+                  user: User = Depends(auth.require_role("admin"))):
     if payload.key in all_schema_keys(db): raise HTTPException(409, "Schema key already exists")
-    item = SchemaDefinition(**payload.model_dump()); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
+    item = SchemaDefinition(**payload.model_dump(), org_id=user.org_id); db.add(item); db.commit(); return {"key":item.key,"name":item.name,"fields":item.fields}
 
 @app.get("/schemas/suggested", response_model=list[SuggestedSchemaOut])
 def list_suggested_schemas(db: Session = Depends(get_db),
@@ -209,7 +242,7 @@ async def upload(file: UploadFile = File(...), document_type: str = "invoice", d
     except Exception as exc:
         _log.exception("Storage upload failed")
         raise HTTPException(502, f"Storage upload failed: {exc}")
-    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=key)
+    doc = Document(filename=file.filename or safe_name, document_type=document_type, stored_path=key, org_id=user.org_id)
     db.add(doc); db.flush(); log(db, doc.id, "Uploaded", f"Schema selected: {document_type}", actor=user); db.commit(); db.refresh(doc)
     return serialize(doc)
 
@@ -222,7 +255,7 @@ def process(document_id: int, background_tasks: BackgroundTasks, db: Session = D
     if doc.status not in {"uploaded", "error", "review_required", "processed"}:
         raise HTTPException(409, f"Cannot reprocess a document in state '{doc.status}'")
     doc.status = "processing"; db.commit(); db.refresh(doc)
-    background_tasks.add_task(run_pipeline_task, doc.id, user.id)
+    background_tasks.add_task(run_pipeline_task, doc.id, user.id, doc.org_id)
     return serialize(doc)
 
 @app.get("/documents")
@@ -367,7 +400,7 @@ def update_document(document_id: int, payload: DocumentUpdate, background_tasks:
         cfg = db.query(WebhookConfig).filter_by(document_type=doc.document_type, active=True).first()
         if cfg:
             doc.webhook_status = "pending"; db.commit()
-            background_tasks.add_task(deliver_webhook, cfg.id, doc.id, user.email)
+            background_tasks.add_task(deliver_webhook, cfg.id, doc.id, user.email, doc.org_id)
     return serialize(doc)
 
 @app.get("/export/{document_id}")
@@ -389,10 +422,10 @@ def list_webhooks(db: Session = Depends(get_db), _: User = Depends(auth.require_
 
 @app.post("/webhooks", status_code=201, response_model=WebhookOut)
 def create_webhook(payload: WebhookCreate, db: Session = Depends(get_db),
-                   _: User = Depends(auth.require_role("admin"))):
+                   user: User = Depends(auth.require_role("admin"))):
     if db.query(WebhookConfig).filter_by(document_type=payload.document_type).first():
         raise HTTPException(409, "A webhook for that document type already exists")
-    w = WebhookConfig(**payload.model_dump()); db.add(w); db.commit(); db.refresh(w)
+    w = WebhookConfig(**payload.model_dump(), org_id=user.org_id); db.add(w); db.commit(); db.refresh(w)
     return _webhook_out(w)
 
 @app.patch("/webhooks/{webhook_id}", response_model=WebhookOut)
@@ -422,10 +455,10 @@ def list_auto_approve(db: Session = Depends(get_db), _: User = Depends(auth.requ
 
 @app.post("/auto-approve", status_code=201, response_model=AutoApproveOut)
 def create_auto_approve(payload: AutoApproveCreate, db: Session = Depends(get_db),
-                        _: User = Depends(auth.require_role("admin"))):
+                        user: User = Depends(auth.require_role("admin"))):
     if db.query(AutoApproveConfig).filter_by(document_type=payload.document_type).first():
         raise HTTPException(409, "An auto-approve config for that document type already exists")
-    c = AutoApproveConfig(**payload.model_dump()); db.add(c); db.commit(); db.refresh(c)
+    c = AutoApproveConfig(**payload.model_dump(), org_id=user.org_id); db.add(c); db.commit(); db.refresh(c)
     return _autoapprove_out(c)
 
 @app.patch("/auto-approve/{config_id}", response_model=AutoApproveOut)

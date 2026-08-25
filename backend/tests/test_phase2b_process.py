@@ -5,7 +5,7 @@ from app.models import Document
 def test_process_returns_202_and_dispatches(client, db_session, monkeypatch):
     calls = []
     monkeypatch.setattr(main_mod, "run_pipeline_task",
-                        lambda document_id, actor_id: calls.append((document_id, actor_id)))
+                        lambda document_id, actor_id, org_id=None: calls.append((document_id, actor_id)))
     doc = Document(filename="x.pdf", document_type="invoice", stored_path="x", status="uploaded")
     db_session.add(doc); db_session.commit(); db_session.refresh(doc)
 

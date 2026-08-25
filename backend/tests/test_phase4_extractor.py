@@ -16,7 +16,7 @@ def _ctx(db):
 
 def test_extractor_fetches_and_passes_hints(db_session, monkeypatch):
     monkeypatch.setattr(config, "LEARNING_ENABLED", True)
-    monkeypatch.setattr(services, "get_correction_hints", lambda db, dt, fields: {"total": [("a", "b")]})
+    monkeypatch.setattr(services, "get_correction_hints", lambda db, org_id, dt, fields: {"total": [("a", "b")]})
     seen = {}
 
     def fake_ai(text, fields, path, hints=None):

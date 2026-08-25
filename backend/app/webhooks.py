@@ -32,8 +32,10 @@ def sign(body: bytes, secret: str) -> str:
     return "sha256=" + hmac.new(secret.encode(), body, sha256).hexdigest()
 
 
-def deliver_webhook(config_id: int, document_id: int, approved_by: str) -> None:
+def deliver_webhook(config_id: int, document_id: int, approved_by: str, org_id: int | None = None) -> None:
     db = SessionLocal()
+    from .context import set_current_org
+    set_current_org(org_id)
     try:
         cfg = db.get(WebhookConfig, config_id)
         doc = db.get(Document, document_id)

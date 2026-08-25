@@ -32,7 +32,7 @@ def _maybe_auto_approve(db: Session, document: Document) -> None:
         document.webhook_status = "pending"
     db.commit(); db.refresh(document)
     if cfg_w:
-        deliver_webhook(cfg_w.id, document.id, "system:auto-approve")
+        deliver_webhook(cfg_w.id, document.id, "system:auto-approve", document.org_id)
 
 
 async def run_pipeline(db: Session, document: Document, hint_type: str, actor=None) -> Document:
@@ -52,7 +52,8 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
 
         db.query(ExtractedField).filter_by(document_id=document.id).delete()
         for f in ctx.fields:
-            db.add(ExtractedField(document_id=document.id, original_value=f["field_value"], **f))
+            db.add(ExtractedField(document_id=document.id, original_value=f["field_value"],
+                                  org_id=document.org_id, **f))
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
         document.anomalies = ctx.anomalies or None
         document.confidence = services.document_confidence(ctx.fields, ctx.schema["fields"])

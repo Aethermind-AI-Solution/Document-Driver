@@ -311,6 +311,20 @@ Operational visibility for running the engine, computed entirely from existing d
 - **Config:** `LOG_FORMAT` (default `json`), `STUCK_PROCESSING_MINUTES` (default 15), `METRICS_RECENT_N` (default 200). No migration, no new dependencies.
 - **Not included (remains full B15, later):** external alerting (email/Slack), a Prometheus/Grafana scrape stack, and time-series history — the Health screen surfaces current state + visual flags only.
 
+## Org tenant isolation
+
+Strict multi-tenant isolation: every document, extracted field, audit entry, user, and config row belongs to an `Organization`, and no account can read or mutate another org's data — cross-org access is structurally impossible.
+
+- **Mechanism (fail-closed):** a shared `_TenantMixin` puts `org_id` on every tenant table; a single `do_orm_execute` listener applies `with_loader_criteria(... org_id == current_org)` to every SELECT, so `.query()`, `Session.get()`, and lazy relationship loads are all scoped automatically. `current_org_id()` **raises when unset** — a query with no org context fails loudly (500) rather than leaking. A cross-org id lookup returns nothing → the existing `404` (existence not disclosed).
+- **Where org context comes from:** an `@app.middleware("http")` (`_org_context_mw`) decodes the JWT and sets the org context for the whole request (it must be middleware, not a dependency — FastAPI runs sync dependencies in separate threadpool contexts that don't propagate). Background paths (`run_pipeline_task`, `deliver_webhook`, MCP tools) set org context explicitly from the document/token. The JWT now carries an `org_id` claim.
+- **Escape hatches (the only unscoped queries):** login's email lookup, the `POST /users` email dup-check (email is globally unique), and the startup `reset_stuck_processing` — each tagged `.execution_options(skip_org_filter=True)`. Do not add others without cause.
+- **⚠️ Invariant:** never share a SQLAlchemy `Session` across org contexts. Every request/background-task/MCP-tool opens a fresh `SessionLocal()` (one org per session lifetime) — this is what makes the `Session.get()` identity map safe. A long-lived or cross-org-reused session would defeat isolation.
+- **Migrations:** `0009_org_tenancy` (organizations table + `org_id` nullable + backfill all existing rows to `DEFAULT_ORG_ID` + composite `(org_id, key/document_type)` uniques) then `0010_org_id_not_null` (flip NOT NULL). Both run via `alembic upgrade head`. `0009` **reflects the real unique-constraint name at runtime** so it works on both SQLite and Postgres.
+- **⚠️ Deploy caveats:** (1) JWTs issued before this deploy lack the `org_id` claim → those users must **re-log-in** (protected endpoints 401 on a stale token — fail-closed, not defaulted). (2) `DEFAULT_ORG_ID` (default `1`) is the org existing data + the bootstrap admin are bound to; `bootstrap_admin` get-or-creates it.
+- **Roles are org-scoped** (`admin`/`reviewer`/`viewer` act within their org). There is **no cross-org superadmin** — System Health / `/admin/metrics` are per-org, and org creation is manual (DB/seed) for now.
+- **MCP fast-follow (required before enabling for a 2nd org):** MCP is bound to `DEFAULT_ORG_ID` today; it needs per-token org binding before a second org uses it.
+- No new dependencies. New env: `DEFAULT_ORG_ID`.
+
 ## Local development is unchanged
 
 Defaults still target localhost, so nothing about local dev changes:

@@ -11,7 +11,7 @@ class ExtractorAgent:
     async def run(self, ctx: PipelineContext) -> StageResult:
         fields = ctx.schema["fields"]
         if config.LEARNING_ENABLED:
-            ctx.hints = services.get_correction_hints(ctx.db, ctx.document.document_type, fields)
+            ctx.hints = services.get_correction_hints(ctx.db, ctx.document.org_id, ctx.document.document_type, fields)
         sem = asyncio.Semaphore(config.PIPELINE_CONCURRENCY)
 
         def extract_one(page: dict):
