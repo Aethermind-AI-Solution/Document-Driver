@@ -94,7 +94,7 @@ def _seed_config_and_doc(db, secret=None, active=True):
 
 def test_deliver_posts_signed_and_audits_success(db_session, monkeypatch):
     cfg, doc = _seed_config_and_doc(db_session, secret="s3cr3t")
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     captured = {}
 
     class FakeResp:
@@ -106,7 +106,7 @@ def test_deliver_posts_signed_and_audits_success(db_session, monkeypatch):
 
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks.requests, "post", fake_post)
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)
     assert captured["url"] == "https://hook/x"
     assert captured["headers"]["X-Aethermind-Signature"] == webhooks.sign(captured["data"], "s3cr3t")
     assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook delivered").count() == 1
@@ -114,33 +114,33 @@ def test_deliver_posts_signed_and_audits_success(db_session, monkeypatch):
 
 def test_deliver_no_secret_no_signature(db_session, monkeypatch):
     cfg, doc = _seed_config_and_doc(db_session, secret=None)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     captured = {}
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks.requests, "post",
                         lambda url, data=None, headers=None, timeout=None: captured.update(headers=headers) or type("R", (), {"status_code": 200})())
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)
     assert "X-Aethermind-Signature" not in captured["headers"]
 
 
 def test_deliver_failure_audits_and_never_raises(db_session, monkeypatch):
     cfg, doc = _seed_config_and_doc(db_session)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     def boom(*a, **k): raise RuntimeError("conn refused")
     monkeypatch.setattr(webhooks.requests, "post", boom)
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")   # must not raise
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)   # must not raise
     assert db_session.query(AuditLog).filter_by(document_id=doc_id, action="Webhook failed").count() == 1
 
 
 def test_deliver_inactive_config_no_post(db_session, monkeypatch):
     cfg, doc = _seed_config_and_doc(db_session, active=False)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     posted = {"v": False}
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks.requests, "post",
                         lambda *a, **k: posted.__setitem__("v", True) or type("R", (), {"status_code": 200})())
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)
     assert posted["v"] is False
 
 

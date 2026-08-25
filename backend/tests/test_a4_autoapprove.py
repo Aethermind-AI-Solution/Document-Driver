@@ -202,7 +202,7 @@ def _wh_seed(db, secret=None, active=True):
 
 def test_deliver_webhook_retries_then_succeeds(db_session, monkeypatch):
     cfg, doc = _wh_seed(db_session)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
     calls = {"n": 0}
@@ -218,7 +218,7 @@ def test_deliver_webhook_retries_then_succeeds(db_session, monkeypatch):
         return FakeResp(200)
 
     monkeypatch.setattr(webhooks.requests, "post", flaky_post)
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)
     doc = db_session.get(Document, doc_id)
     assert calls["n"] == 3
     assert doc.webhook_status == "delivered"
@@ -228,7 +228,7 @@ def test_deliver_webhook_retries_then_succeeds(db_session, monkeypatch):
 
 def test_deliver_webhook_all_attempts_fail(db_session, monkeypatch):
     cfg, doc = _wh_seed(db_session)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
     calls = {"n": 0}
@@ -238,7 +238,7 @@ def test_deliver_webhook_all_attempts_fail(db_session, monkeypatch):
         raise RuntimeError("conn refused")
 
     monkeypatch.setattr(webhooks.requests, "post", always_boom)
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")   # must not raise
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)   # must not raise
     doc = db_session.get(Document, doc_id)
     assert calls["n"] == webhooks._RETRIES
     assert doc.webhook_status == "failed"
@@ -248,7 +248,7 @@ def test_deliver_webhook_all_attempts_fail(db_session, monkeypatch):
 
 def test_deliver_webhook_success_first_try_no_retry(db_session, monkeypatch):
     cfg, doc = _wh_seed(db_session)
-    cfg_id, doc_id = cfg.id, doc.id
+    cfg_id, doc_id, org_id = cfg.id, doc.id, cfg.org_id
     monkeypatch.setattr(webhooks, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(webhooks, "_RETRY_BACKOFF", 0)
     calls = {"n": 0}
@@ -261,7 +261,7 @@ def test_deliver_webhook_success_first_try_no_retry(db_session, monkeypatch):
         return FakeResp()
 
     monkeypatch.setattr(webhooks.requests, "post", fake_post)
-    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co")
+    webhooks.deliver_webhook(cfg_id, doc_id, "you@x.co", org_id)
     doc = db_session.get(Document, doc_id)
     assert calls["n"] == 1
     assert doc.webhook_status == "delivered"

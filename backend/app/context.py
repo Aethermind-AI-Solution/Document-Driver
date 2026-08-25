@@ -11,6 +11,8 @@ def reset_org(token) -> None:
     _current_org.reset(token)
 
 
-def current_org_id() -> int | None:
-    # NOTE: hardened to raise-when-unset in Task 4 once the loader-criteria is live.
-    return _current_org.get()
+def current_org_id() -> int:
+    v = _current_org.get()
+    if v is None:
+        raise RuntimeError("org context is not set — refusing to run an unscoped tenant query")
+    return v

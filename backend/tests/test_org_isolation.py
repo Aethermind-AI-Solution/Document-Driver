@@ -108,29 +108,87 @@ def test_pipeline_stamps_extracted_field_org_id(db_session, monkeypatch):
 
     asyncio.run(pipeline.run_pipeline(db_session, doc, "invoice"))
 
-    field = db_session.query(ExtractedField).filter_by(document_id=doc.id, field_name="total").first()
+    # Verification query: the ambient test context is org 1 (autouse default),
+    # but this row belongs to org 7 (inherited from the document, not
+    # context) — skip_org_filter to inspect it directly, same pattern as
+    # test_log_stamps_org_id_from_context above.
+    field = (db_session.query(ExtractedField).filter_by(document_id=doc.id, field_name="total")
+             .execution_options(skip_org_filter=True).first())
     assert field is not None and field.org_id == 7
 
 
 def test_get_correction_hints_takes_org_id(db_session):
     """get_correction_hints now requires an explicit org_id positional arg and
-    scopes the underlying query to it."""
+    scopes the underlying query to it. Build each org's rows under that org's
+    own context (org_id is stamped on ExtractedField from ambient context,
+    same as production — see services.log()/pipeline), then read back under
+    matching context, mirroring the real call site (extractor.py always has
+    ambient context == ctx.document.org_id)."""
+    from app.context import set_current_org
     from app.models import Document, ExtractedField
     from app.services import get_correction_hints
 
+    set_current_org(1)
     doc_org1 = Document(filename="a", document_type="invoice", stored_path="a",
                         status="approved", org_id=1)
-    doc_org2 = Document(filename="b", document_type="invoice", stored_path="b",
-                        status="approved", org_id=2)
-    db_session.add_all([doc_org1, doc_org2]); db_session.flush()
+    db_session.add(doc_org1); db_session.flush()
     db_session.add(ExtractedField(document_id=doc_org1.id, field_name="total",
                                   original_value="1,00", field_value="100",
                                   edited_by_user=True, confidence=0.9))
+    db_session.commit()
+
+    set_current_org(2)
+    doc_org2 = Document(filename="b", document_type="invoice", stored_path="b",
+                        status="approved", org_id=2)
+    db_session.add(doc_org2); db_session.flush()
     db_session.add(ExtractedField(document_id=doc_org2.id, field_name="total",
                                   original_value="9,00", field_value="900",
                                   edited_by_user=True, confidence=0.9))
     db_session.commit()
 
     fields = [{"name": "total"}]
+    set_current_org(1)
     assert get_correction_hints(db_session, 1, "invoice", fields) == {"total": [("1,00", "100")]}
+    set_current_org(2)
     assert get_correction_hints(db_session, 2, "invoice", fields) == {"total": [("9,00", "900")]}
+
+
+# ---- Task 4: fail-closed with_loader_criteria scoping ----------------------
+
+def test_query_without_org_context_raises(db_session):
+    """With org context unset, any SELECT against a _TenantMixin model must
+    raise RuntimeError rather than silently returning cross-org (or all) rows.
+    The autouse fixture defaults context to org 1, so reset it to None here
+    to exercise the fail-closed path."""
+    import pytest
+    from app.context import set_current_org
+    from app.models import Document
+
+    set_current_org(None)
+    with pytest.raises(RuntimeError):
+        db_session.query(Document).all()
+    with pytest.raises(RuntimeError):
+        db_session.query(Document).first()
+
+
+def test_query_with_org_context_scopes_rows(db_session):
+    """With org context set, queries only return rows for that org — rows
+    belonging to other orgs are filtered out entirely (not just hidden by id)."""
+    from app.context import set_current_org
+    from app.models import Document
+
+    set_current_org(1)
+    doc1 = Document(filename="a", document_type="invoice", stored_path="a", org_id=1)
+    db_session.add(doc1); db_session.commit()
+
+    set_current_org(2)
+    doc2 = Document(filename="b", document_type="invoice", stored_path="b", org_id=2)
+    db_session.add(doc2); db_session.commit()
+
+    set_current_org(1)
+    rows = db_session.query(Document).all()
+    assert [d.id for d in rows] == [doc1.id]
+
+    set_current_org(2)
+    rows = db_session.query(Document).all()
+    assert [d.id for d in rows] == [doc2.id]

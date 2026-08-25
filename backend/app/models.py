@@ -12,8 +12,19 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
+def _default_org_id() -> int:
+    """Python-side INSERT default: if a _TenantMixin row is constructed
+    without an explicit org_id, stamp it from the ambient context var (same
+    source services.log() already uses). Mirrors create_user()'s existing
+    org_id-falls-back-to-default pattern. Raises (fail-closed, same as any
+    other org-scoped operation) if no org context is set."""
+    from .context import current_org_id
+    return current_org_id()
+
+
 class _TenantMixin:
-    org_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True, index=True)
+    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True,
+                                        default=_default_org_id)
 
 class Document(Base, _TenantMixin):
     __tablename__ = "documents"
