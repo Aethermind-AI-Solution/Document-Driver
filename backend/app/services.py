@@ -278,18 +278,23 @@ def process_document(db: Session, document: Document, actor=None) -> Document:
     from .agents.pipeline import run_pipeline
     return asyncio.run(run_pipeline(db, document, document.document_type, actor))
 
-def create_user(db: Session, email: str, password: str, role: str) -> User:
-    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True)
+def create_user(db: Session, email: str, password: str, role: str, org_id: int | None = None) -> User:
+    from .config import DEFAULT_ORG_ID
+    user = User(email=email, password_hash=hash_password(password), role=role, is_active=True,
+                org_id=org_id if org_id is not None else DEFAULT_ORG_ID)
     db.add(user); db.commit(); db.refresh(user)
     return user
 
 def bootstrap_admin(db: Session) -> None:
-    from .config import ADMIN_EMAIL, ADMIN_PASSWORD
+    from .config import ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_ORG_ID
+    from .models import Organization
     if not (ADMIN_EMAIL and ADMIN_PASSWORD):
         return
-    if db.query(User).count() > 0:
+    if db.get(Organization, DEFAULT_ORG_ID) is None:
+        db.add(Organization(id=DEFAULT_ORG_ID, name="Default Organization")); db.commit()
+    if db.query(User).filter_by(org_id=DEFAULT_ORG_ID).count() > 0:
         return
-    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin")
+    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin", org_id=DEFAULT_ORG_ID)
 
 def get_correction_hints(db: Session, document_type: str, fields: list[dict]) -> dict:
     """Recent human corrections on APPROVED docs of this type →

@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from app import auth
 from app.database import Base, get_db
 from app.main import app
-from app.models import User
+from app.models import Organization, User
 
 
 @pytest.fixture
@@ -17,6 +17,8 @@ def db_session(tmp_path):
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
+    session.add(Organization(id=1, name="Default Organization"))
+    session.commit()
 
     def override_get_db():
         yield session
@@ -33,7 +35,7 @@ def db_session(tmp_path):
 def client(db_session):
     """Existing endpoint tests run authenticated as an admin unless a test
     overrides get_current_user itself."""
-    admin = User(email="admin@test.local", password_hash="x", role="admin", is_active=True)
+    admin = User(email="admin@test.local", password_hash="x", role="admin", is_active=True, org_id=1)
     db_session.add(admin)
     db_session.commit()
     app.dependency_overrides[auth.get_current_user] = lambda: admin

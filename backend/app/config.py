@@ -51,6 +51,7 @@ AUTO_APPROVE_ENABLED = os.getenv("AUTO_APPROVE_ENABLED", "false").lower() in ("1
 LOG_FORMAT = os.getenv("LOG_FORMAT", "json")
 STUCK_PROCESSING_MINUTES = int(os.getenv("STUCK_PROCESSING_MINUTES", "15"))
 METRICS_RECENT_N = int(os.getenv("METRICS_RECENT_N", "200"))
+DEFAULT_ORG_ID = int(os.getenv("DEFAULT_ORG_ID", "1"))
 
 
 def check_production_config():
