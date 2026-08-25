@@ -130,7 +130,7 @@ def test_maybe_auto_approve_eligible_with_webhook(db_session, monkeypatch):
 
     assert d.status == "approved"
     assert d.webhook_status == "pending"
-    assert spy_calls == [(cfg_w.id, d.id, "system:auto-approve")]
+    assert spy_calls == [(cfg_w.id, d.id, "system:auto-approve", d.org_id)]
 
 
 def test_maybe_auto_approve_not_eligible_global_off(db_session, monkeypatch):

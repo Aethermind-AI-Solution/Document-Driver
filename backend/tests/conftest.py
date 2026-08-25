@@ -35,14 +35,17 @@ def db_session(tmp_path):
 def client(db_session):
     """Existing endpoint tests run authenticated as an admin unless a test
     overrides get_current_user itself."""
+    from app.context import set_current_org, reset_org
     admin = User(email="admin@test.local", password_hash="x", role="admin", is_active=True, org_id=1)
     db_session.add(admin)
     db_session.commit()
     app.dependency_overrides[auth.get_current_user] = lambda: admin
+    org_token = set_current_org(admin.org_id)
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(auth.get_current_user, None)
+        reset_org(org_token)
 
 
 from app.security import rate_limiter

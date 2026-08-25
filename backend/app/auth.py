@@ -29,6 +29,7 @@ def verify_password(pw: str, hashed: str) -> bool:
 def create_access_token(user: User) -> str:
     now = datetime.now(timezone.utc)
     payload = {"sub": str(user.id), "email": user.email, "role": user.role,
+               "org_id": user.org_id,
                "iat": now, "exp": now + timedelta(hours=config.JWT_EXPIRE_HOURS)}
     return jwt.encode(payload, config.JWT_SECRET, algorithm="HS256")
 
@@ -54,6 +55,12 @@ def get_current_user(authorization: str | None = Header(default=None),
         raise HTTPException(401, "Invalid token claims")
     if not user or not user.is_active:
         raise HTTPException(401, "User not found or inactive")
+    if "org_id" not in claims:
+        raise HTTPException(401, "Stale token — please log in again")
+    if claims["org_id"] != user.org_id:
+        raise HTTPException(401, "Token org mismatch")
+    from .context import set_current_org
+    set_current_org(user.org_id)
     return user
 
 

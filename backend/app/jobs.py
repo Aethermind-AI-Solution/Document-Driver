@@ -9,11 +9,13 @@ from .agents.pipeline import run_pipeline
 _log = logging.getLogger("aethermind")
 
 
-def run_pipeline_task(document_id: int, actor_id: int | None = None) -> None:
+def run_pipeline_task(document_id: int, actor_id: int | None = None, org_id: int | None = None) -> None:
     """Run the pipeline in a fresh DB session after the HTTP response is sent.
     run_pipeline sets status='error' + logs on failure; the guard here just keeps
     the background worker alive."""
     db = SessionLocal()
+    from .context import set_current_org
+    set_current_org(org_id)
     try:
         doc = db.get(Document, document_id)
         if not doc:
@@ -28,7 +30,7 @@ def run_pipeline_task(document_id: int, actor_id: int | None = None) -> None:
 
 def reset_stuck_processing(db: Session) -> int:
     """Docs stranded in 'processing' (instance restarted mid-run) → 'error', retryable."""
-    stuck = db.query(Document).filter(Document.status == "processing").all()
+    stuck = db.query(Document).execution_options(skip_org_filter=True).filter(Document.status == "processing").all()
     for doc in stuck:
         doc.status = "error"
         log(db, doc.id, "Processing failed", "Processing interrupted (server restart)")

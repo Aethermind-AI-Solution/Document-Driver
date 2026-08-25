@@ -25,9 +25,11 @@ def can_transition(current: str, target: str) -> bool:
 
 
 def log(db: Session, document_id: int, action: str, details: str = "", actor=None):
+    from .context import current_org_id
     db.add(AuditLog(document_id=document_id, action=action, details=details,
                     actor_id=getattr(actor, "id", None),
-                    actor_email=getattr(actor, "email", None)))
+                    actor_email=getattr(actor, "email", None),
+                    org_id=current_org_id()))
 
 def apply_approval(db: Session, document, prior_status: str, actor,
                    action_label: str = "Approved", details: str = "") -> None:
@@ -296,7 +298,7 @@ def bootstrap_admin(db: Session) -> None:
         return
     create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin", org_id=DEFAULT_ORG_ID)
 
-def get_correction_hints(db: Session, document_type: str, fields: list[dict]) -> dict:
+def get_correction_hints(db: Session, org_id: int | None, document_type: str, fields: list[dict]) -> dict:
     """Recent human corrections on APPROVED docs of this type →
     {field_name: [(original_value, corrected_value), ...]}. Bounded, deduped;
     {} on cold-start or any error (never breaks extraction)."""
@@ -304,7 +306,8 @@ def get_correction_hints(db: Session, document_type: str, fields: list[dict]) ->
         names = {f["name"] for f in fields}
         rows = (db.query(ExtractedField.field_name, ExtractedField.original_value, ExtractedField.field_value)
                 .join(Document, ExtractedField.document_id == Document.id)
-                .filter(Document.document_type == document_type,
+                .filter(Document.org_id == org_id,
+                        Document.document_type == document_type,
                         Document.status == "approved",
                         ExtractedField.edited_by_user.is_(True),
                         ExtractedField.original_value.isnot(None),

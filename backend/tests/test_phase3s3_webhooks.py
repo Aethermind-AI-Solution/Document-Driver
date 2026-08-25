@@ -155,7 +155,7 @@ def _approve(client, doc_id):
 def test_approve_with_active_config_schedules_delivery(client, db_session, monkeypatch):
     calls = []
     monkeypatch.setattr(main_mod, "deliver_webhook",
-                        lambda config_id, document_id, approved_by: calls.append((config_id, document_id)))
+                        lambda config_id, document_id, approved_by, org_id=None: calls.append((config_id, document_id)))
     doc = _Doc(filename="a.pdf", document_type="invoice", stored_path="a", status="review_required")
     cfg = _WC(document_type="invoice", url="https://h/x", active=True)
     db_session.add_all([doc, cfg]); db_session.commit(); db_session.refresh(doc); db_session.refresh(cfg)

@@ -14,7 +14,8 @@ from .agents.pipeline import run_pipeline
 
 def build_service_principal() -> SimpleNamespace:
     """The fixed identity all MCP tool calls act as (for audit stamping)."""
-    return SimpleNamespace(id=None, email="mcp-service", role=config.MCP_SERVICE_ROLE)
+    return SimpleNamespace(id=None, email="mcp-service", role=config.MCP_SERVICE_ROLE,
+                           org_id=config.DEFAULT_ORG_ID)
 
 
 class TokenAuthASGI:
@@ -87,7 +88,7 @@ async def extract_document_impl(db, file_base64: str, filename: str,
     schema_for(db, hint)  # raises ValueError on unknown type
     key = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{Path(filename).name}"
     storage.get_storage().save(key, data)
-    doc = Document(filename=filename, document_type=hint, stored_path=key)
+    doc = Document(filename=filename, document_type=hint, stored_path=key, org_id=actor.org_id)
     db.add(doc); db.commit()
     await run_pipeline(db, doc, doc.document_type, actor=actor)
     db.refresh(doc)
@@ -101,6 +102,8 @@ def build_mcp() -> FastMCP:
     def list_document_types() -> list[dict]:
         """List the document types (schemas) Aethermind can extract."""
         db = SessionLocal()
+        from .context import set_current_org
+        set_current_org(config.DEFAULT_ORG_ID)
         try:
             return list_types_impl(db)
         finally:
@@ -110,6 +113,8 @@ def build_mcp() -> FastMCP:
     async def extract_document(file_base64: str, filename: str, document_type: str = "auto") -> dict:
         """Extract structured fields from a base64-encoded document (PDF/PNG/JPEG)."""
         db = SessionLocal()
+        from .context import set_current_org
+        set_current_org(config.DEFAULT_ORG_ID)
         try:
             return await extract_document_impl(db, file_base64, filename, document_type,
                                                build_service_principal())
@@ -120,6 +125,8 @@ def build_mcp() -> FastMCP:
     def get_document(document_id: int) -> dict:
         """Fetch a processed document's fields, confidence, grounding, and status."""
         db = SessionLocal()
+        from .context import set_current_org
+        set_current_org(config.DEFAULT_ORG_ID)
         try:
             return get_document_impl(db, document_id)
         finally:
@@ -129,6 +136,8 @@ def build_mcp() -> FastMCP:
     def submit_correction(document_id: int, field_name: str, value: str) -> dict:
         """Correct a single extracted field's value (human-in-the-loop)."""
         db = SessionLocal()
+        from .context import set_current_org
+        set_current_org(config.DEFAULT_ORG_ID)
         try:
             return submit_correction_impl(db, document_id, field_name, value,
                                           build_service_principal())
