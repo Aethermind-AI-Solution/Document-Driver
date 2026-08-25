@@ -290,13 +290,18 @@ def create_user(db: Session, email: str, password: str, role: str, org_id: int |
 def bootstrap_admin(db: Session) -> None:
     from .config import ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_ORG_ID
     from .models import Organization
+    from .context import set_current_org, reset_org
     if not (ADMIN_EMAIL and ADMIN_PASSWORD):
         return
-    if db.get(Organization, DEFAULT_ORG_ID) is None:
-        db.add(Organization(id=DEFAULT_ORG_ID, name="Default Organization")); db.commit()
-    if db.query(User).filter_by(org_id=DEFAULT_ORG_ID).count() > 0:
-        return
-    create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin", org_id=DEFAULT_ORG_ID)
+    token = set_current_org(DEFAULT_ORG_ID)
+    try:
+        if db.get(Organization, DEFAULT_ORG_ID) is None:
+            db.add(Organization(id=DEFAULT_ORG_ID, name="Default Organization")); db.commit()
+        if db.query(User).filter_by(org_id=DEFAULT_ORG_ID).count() > 0:
+            return
+        create_user(db, ADMIN_EMAIL, ADMIN_PASSWORD, "admin", org_id=DEFAULT_ORG_ID)
+    finally:
+        reset_org(token)
 
 def get_correction_hints(db: Session, org_id: int | None, document_type: str, fields: list[dict]) -> dict:
     """Recent human corrections on APPROVED docs of this type →

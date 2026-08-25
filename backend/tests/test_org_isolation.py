@@ -466,3 +466,68 @@ def test_auto_approve_and_webhook_lookup_never_resolve_other_org_config(db_sessi
     # Same query shape as the webhook-config lookup in PUT /document.
     wh = db_session.query(WebhookConfig).filter_by(document_type="invoice", active=True).first()
     assert wh is None
+
+
+# ---- Task 6: startup paths run with NO ambient org context -----------------
+
+def test_bootstrap_admin_sets_its_own_org_context(db_session, monkeypatch):
+    """bootstrap_admin() runs at app startup, before any request has set org
+    context. Reset context to None (undoing the autouse default-org-1
+    fixture) to prove bootstrap_admin sets DEFAULT_ORG_ID itself rather than
+    relying on an ambient context — against the unfixed code this raises
+    RuntimeError from current_org_id()."""
+    from app import config, context
+    from app.models import User
+    from app.services import bootstrap_admin
+
+    monkeypatch.setattr(config, "ADMIN_EMAIL", "admin@bootstrap.test")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "supersecret1")
+
+    context.set_current_org(None)
+    bootstrap_admin(db_session)  # must not raise
+
+    admin = (db_session.query(User).filter_by(email="admin@bootstrap.test")
+             .execution_options(skip_org_filter=True).first())
+    assert admin is not None
+    assert admin.org_id == config.DEFAULT_ORG_ID
+
+
+def test_reset_stuck_processing_uses_each_docs_own_org_context(db_session):
+    """reset_stuck_processing() runs at app startup with NO ambient org
+    context, and its stuck-docs query is cross-org (skip_org_filter=True).
+    Reset context to None first, seed one stuck 'processing' doc in org 1 and
+    one in org 2, then prove: (a) the call doesn't raise, (b) both docs flip
+    to 'error', and (c) each doc's audit log is stamped with THAT doc's own
+    org_id — not one ambient org, which would mislabel the other org's row."""
+    from app import context
+    from app.models import AuditLog, Document, Organization
+    from app.jobs import reset_stuck_processing
+
+    context.set_current_org(1)
+    doc1 = Document(filename="stuck1.pdf", document_type="invoice",
+                    stored_path="stuck1.pdf", status="processing", org_id=1)
+    db_session.add(doc1); db_session.commit(); db_session.refresh(doc1)
+    doc1_id = doc1.id
+
+    db_session.add(Organization(id=2, name="Org Two")); db_session.commit()
+    context.set_current_org(2)
+    doc2 = Document(filename="stuck2.pdf", document_type="invoice",
+                    stored_path="stuck2.pdf", status="processing", org_id=2)
+    db_session.add(doc2); db_session.commit(); db_session.refresh(doc2)
+    doc2_id = doc2.id
+
+    context.set_current_org(None)
+    count = reset_stuck_processing(db_session)  # must not raise
+    assert count == 2
+
+    docs = (db_session.query(Document).filter(Document.id.in_([doc1_id, doc2_id]))
+            .execution_options(skip_org_filter=True).all())
+    assert {d.status for d in docs} == {"error"}
+
+    log1 = (db_session.query(AuditLog).filter_by(document_id=doc1_id, action="Processing failed")
+            .execution_options(skip_org_filter=True).one())
+    assert log1.org_id == 1
+
+    log2 = (db_session.query(AuditLog).filter_by(document_id=doc2_id, action="Processing failed")
+            .execution_options(skip_org_filter=True).one())
+    assert log2.org_id == 2

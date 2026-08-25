@@ -29,10 +29,17 @@ def run_pipeline_task(document_id: int, actor_id: int | None = None, org_id: int
 
 
 def reset_stuck_processing(db: Session) -> int:
-    """Docs stranded in 'processing' (instance restarted mid-run) → 'error', retryable."""
+    """Docs stranded in 'processing' (instance restarted mid-run) → 'error', retryable.
+    Cross-org query, so each doc's mutation+audit log is scoped to ITS OWN org context —
+    never one ambient org, which would mislabel other orgs' audit rows."""
+    from .context import set_current_org, reset_org
     stuck = db.query(Document).execution_options(skip_org_filter=True).filter(Document.status == "processing").all()
     for doc in stuck:
-        doc.status = "error"
-        log(db, doc.id, "Processing failed", "Processing interrupted (server restart)")
+        token = set_current_org(doc.org_id)
+        try:
+            doc.status = "error"
+            log(db, doc.id, "Processing failed", "Processing interrupted (server restart)")
+        finally:
+            reset_org(token)
     db.commit()
     return len(stuck)
