@@ -47,7 +47,7 @@ class ClassifierAgent:
                 proposal = await propose_schema(text, services.all_schema_keys(c.db))
                 if proposal:
                     try:
-                        row = persist_suggested(c.db, proposal, c.document.id, actor=c.actor)
+                        row = persist_suggested(c.db, proposal, c.document.id, actor=c.actor, org_id=c.document.org_id)
                         c.document.document_type = row.key
                         c.schema = {"name": row.name, "fields": row.fields}
                         c._detail = f"authored:{row.key} ({conf:.2f})"

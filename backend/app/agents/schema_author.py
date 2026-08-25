@@ -97,9 +97,9 @@ async def propose_schema(text: str, existing_keys: set[str]) -> dict | None:
         return None
 
 
-def persist_suggested(db, proposal: dict, origin_document_id: int, actor=None) -> SchemaDefinition:
+def persist_suggested(db, proposal: dict, origin_document_id: int, actor=None, org_id=None) -> SchemaDefinition:
     row = SchemaDefinition(key=proposal["key"], name=proposal["name"], fields=proposal["fields"],
-                           status="suggested", origin_document_id=origin_document_id)
+                           status="suggested", origin_document_id=origin_document_id, org_id=org_id)
     db.add(row)
     db.flush()
     services.log(db, origin_document_id, "Schema suggested", f'{row.key}: {row.name}', actor=actor)
