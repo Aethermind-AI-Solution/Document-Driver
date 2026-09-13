@@ -70,7 +70,7 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
         document.anomalies = (ctx.anomalies or []) + dup_anomalies or None
         document.confidence = services.document_confidence(ctx.fields, ctx.schema["fields"])
-        document.review_required = bool(ctx.anomalies) or any(
+        document.review_required = bool(document.anomalies) or any(
             f["confidence"] < .9 or not f["validated"] for f in ctx.fields)
         document.status = "review_required" if document.review_required else "processed"
         document.processing_time = round(time.perf_counter() - started, 2)

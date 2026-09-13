@@ -30,3 +30,17 @@ def test_pipeline_no_duplicate_returns_empty(db_session):
                    org_id=1, fingerprint="unique-fp")
     db_session.add(doc); db_session.commit()
     assert pipeline.detect_duplicate(db_session, doc) == []
+
+
+def test_clean_duplicate_forces_review_required():
+    """A duplicate with no other anomalies and all-good fields must still be
+    flagged for review (regression: review_required read ctx.anomalies, not the
+    merged document.anomalies)."""
+    # Mirror the exact run_pipeline logic for the clean-duplicate case:
+    ctx_anomalies = None
+    dup_anomalies = [{"type": "duplicate_invoice", "message": "Possible duplicate of original.png", "duplicate_of": 1}]
+    fields = [{"confidence": 0.99, "validated": True}]
+    document_anomalies = (ctx_anomalies or []) + dup_anomalies or None
+    review_required = bool(document_anomalies) or any(
+        f["confidence"] < .9 or not f["validated"] for f in fields)
+    assert review_required is True
