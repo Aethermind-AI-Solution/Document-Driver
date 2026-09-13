@@ -18,6 +18,17 @@ _log = logging.getLogger("aethermind")
 STAGES = [ClassifierAgent, ExtractorAgent, ReconcilerAgent, ValidatorAgent]
 
 
+def detect_duplicate(db: Session, document: Document) -> list[dict]:
+    """Return a duplicate anomaly (as a one-item list) if another doc in the org
+    shares this fingerprint, else an empty list."""
+    dup = services.find_duplicate(db, document)
+    if dup is None:
+        return []
+    return [{"type": "duplicate_invoice",
+             "message": f"Possible duplicate of {dup.filename}",
+             "duplicate_of": dup.id}]
+
+
 def _maybe_auto_approve(db: Session, document: Document) -> None:
     if not services.should_auto_approve(db, document):
         return
@@ -54,8 +65,10 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         for f in ctx.fields:
             db.add(ExtractedField(document_id=document.id, original_value=f["field_value"],
                                   org_id=document.org_id, **f))
+        document.fingerprint = services.compute_fingerprint(ctx.fields)
+        dup_anomalies = detect_duplicate(db, document)
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
-        document.anomalies = ctx.anomalies or None
+        document.anomalies = (ctx.anomalies or []) + dup_anomalies or None
         document.confidence = services.document_confidence(ctx.fields, ctx.schema["fields"])
         document.review_required = bool(ctx.anomalies) or any(
             f["confidence"] < .9 or not f["validated"] for f in ctx.fields)
