@@ -43,6 +43,7 @@ class Document(Base, _TenantMixin):
     webhook_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     webhook_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     auto_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     extracted_fields: Mapped[list["ExtractedField"]] = relationship(cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(cascade="all, delete-orphan")
 

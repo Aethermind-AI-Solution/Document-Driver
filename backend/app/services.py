@@ -1,4 +1,4 @@
-import base64, json, os, re
+import base64, hashlib, json, os, re
 from pathlib import Path
 import fitz
 from sqlalchemy.orm import Session
@@ -154,6 +154,28 @@ def document_confidence(fields: list[dict], schema_fields: list[dict]) -> float:
     if fields:
         return sum(f["confidence"] for f in fields) / len(fields)
     return 1.0
+
+def compute_fingerprint(fields: list[dict]) -> str | None:
+    """Stable hash of the invoice identity (vendor+number+total+date). Returns
+    None when the invoice number is missing (can't reliably de-dupe without it)."""
+    by_name = {f["field_name"]: f.get("field_value") for f in fields}
+    number = _norm(by_name.get("invoice_number"))
+    if not number:
+        return None
+    parts = [_norm(by_name.get("vendor_name")), number,
+             _norm(by_name.get("total")), _norm(by_name.get("invoice_date"))]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def find_duplicate(db: Session, document) -> "Document | None":
+    """Earliest OTHER document in the same org sharing this fingerprint. Org
+    scoping is enforced by the fail-closed loader criteria already in place."""
+    from .models import Document as _Doc
+    if not document.fingerprint:
+        return None
+    return (db.query(_Doc)
+            .filter(_Doc.fingerprint == document.fingerprint, _Doc.id != document.id)
+            .order_by(_Doc.id.asc()).first())
 
 def _ground(value, quote, hay, hay_tokens, verifiable):
     if value is None:
