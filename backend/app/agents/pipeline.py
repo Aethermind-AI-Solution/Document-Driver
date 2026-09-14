@@ -3,11 +3,11 @@ import logging
 from pathlib import Path
 from dataclasses import asdict
 from sqlalchemy.orm import Session
-from .. import services, storage, ocr
+from .. import services, storage, ocr, boxes
 from ..models import Document, ExtractedField, WebhookConfig
 from ..webhooks import deliver_webhook
 from .base import PipelineContext
-from .pages import split_pages
+from .pages import split_pages, render_png
 from .classifier import ClassifierAgent
 from .extractor import ExtractorAgent
 from .reconciler import ReconcilerAgent
@@ -27,6 +27,19 @@ def detect_duplicate(db: Session, document: Document) -> list[dict]:
     return [{"type": "duplicate_invoice",
              "message": f"Possible duplicate of {dup.filename}",
              "duplicate_of": dup.id}]
+
+
+def compute_field_boxes(fields: list[dict], pages: list[dict]) -> dict:
+    """Field -> normalized box, mapped from OCR words on the first page. Empty when
+    OCR is disabled (ocr_image returns no words) or there are no pages."""
+    if not pages:
+        return {}
+    words = services_ocr_words(pages[0]["pdf_bytes"])
+    return boxes.map_field_boxes(fields, words)
+
+
+def services_ocr_words(pdf_bytes: bytes) -> list[dict]:
+    return ocr.ocr_image(render_png(pdf_bytes)).get("words", [])
 
 
 def _maybe_auto_approve(db: Session, document: Document) -> None:
@@ -62,10 +75,11 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         if errored:
             raise RuntimeError(f"Pipeline stage(s) failed: {', '.join(errored)}")
 
+        field_boxes = compute_field_boxes(ctx.fields, ctx.pages)
         db.query(ExtractedField).filter_by(document_id=document.id).delete()
         for f in ctx.fields:
             db.add(ExtractedField(document_id=document.id, original_value=f["field_value"],
-                                  org_id=document.org_id, **f))
+                                  org_id=document.org_id, box=field_boxes.get(f["field_name"]), **f))
         document.fingerprint = services.compute_fingerprint(ctx.fields)
         dup_anomalies = detect_duplicate(db, document)
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
