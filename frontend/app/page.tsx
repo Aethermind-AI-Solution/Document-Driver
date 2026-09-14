@@ -114,11 +114,15 @@ function Review({role,document,schema,onSaved,onRejected,onSavedPending,onExport
  const isTerminal=!!document&&(document.status==="approved"||document.status==="rejected");
  const editable=!!document&&!!role&&canReview(role)&&!isTerminal;
  const submit=async(action:"approve"|"reject"|"save"|"reopen",done:()=>void)=>{setSaving(true);setError("");try{await api(`/document/${document.id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,reason:reason.trim()||null,fields:document.fields.map((f:any)=>({field_name:f.field_name,field_value:f.field_value,validated:action==="approve"?true:f.validated}))})});setReason("");done()}catch(e:any){setError(e?.message||"Action failed. Please retry.")}finally{setSaving(false)}};
- useEffect(()=>{ if(!document){setImageUrl("");return;} let url="";
-   try{
-     fetchImageUrl(`/document/${document.id}/image`).then(u=>{url=u;setImageUrl(u);}).catch(()=>setImageUrl(""));
-   }catch{setImageUrl("");}
-   return ()=>{ if(url) URL.revokeObjectURL(url); }; },[document?.id]);
+ useEffect(()=>{ if(!document){setImageUrl("");return;} let cancelled=false; let url="";
+   (async()=>{
+     try{
+       const u=await fetchImageUrl(`/document/${document.id}/image`);
+       if(cancelled){URL.revokeObjectURL(u);return;}
+       url=u;setImageUrl(u);
+     }catch{ if(!cancelled) setImageUrl(""); }
+   })();
+   return ()=>{ cancelled=true; if(url) URL.revokeObjectURL(url); }; },[document?.id]);
  useEffect(()=>{ if(!document?.fields?.length) return;
    const onKey=(e:KeyboardEvent)=>{ const names=document.fields.map((f:any)=>f.field_name);
      const i=Math.max(0,names.indexOf(activeField));

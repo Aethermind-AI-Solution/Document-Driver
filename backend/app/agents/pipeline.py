@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from dataclasses import asdict
 from sqlalchemy.orm import Session
-from .. import services, storage, ocr, boxes
+from .. import services, storage, ocr, boxes, config
 from ..models import Document, ExtractedField, WebhookConfig
 from ..webhooks import deliver_webhook
 from .base import PipelineContext
@@ -31,10 +31,14 @@ def detect_duplicate(db: Session, document: Document) -> list[dict]:
 
 def compute_field_boxes(fields: list[dict], pages: list[dict]) -> dict:
     """Field -> normalized box, mapped from OCR words on the first page. Empty when
-    OCR is disabled (ocr_image returns no words) or there are no pages."""
-    if not pages:
+    OCR is disabled, there are no pages, or OCR/rasterization fails (fail-soft)."""
+    if config.OCR_BACKEND != "textract" or not pages:
         return {}
-    words = services_ocr_words(pages[0]["pdf_bytes"])
+    try:
+        words = services_ocr_words(pages[0]["pdf_bytes"])
+    except Exception:
+        _log.warning("field-box OCR failed; no boxes", exc_info=True)
+        return {}
     return boxes.map_field_boxes(fields, words)
 
 
