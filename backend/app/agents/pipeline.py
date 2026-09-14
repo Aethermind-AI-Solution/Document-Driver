@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from dataclasses import asdict
 from sqlalchemy.orm import Session
-from .. import services, storage
+from .. import services, storage, ocr
 from ..models import Document, ExtractedField, WebhookConfig
 from ..webhooks import deliver_webhook
 from .base import PipelineContext
@@ -54,6 +54,7 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
         suffix = Path(document.stored_path).suffix
         ctx = PipelineContext(db=db, document=document, hint_type=hint_type, actor=actor)
         ctx.pages = split_pages(data, suffix)
+        ctx.pages = ocr.enrich_pages(ctx.pages)
         for AgentCls in STAGES:
             await AgentCls().run(ctx)
 

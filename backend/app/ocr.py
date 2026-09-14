@@ -3,6 +3,7 @@ disabled backend returns empty text/boxes so the pipeline never breaks. Boxes ar
 normalized [left, top, right, bottom] in 0..1."""
 import logging
 from . import config
+from .agents.pages import render_png
 
 _log = logging.getLogger("aethermind")
 
@@ -32,3 +33,17 @@ def ocr_image(data: bytes) -> dict:
                       "box": [round(x0, 4), round(y0, 4),
                               round(x0 + bb["Width"], 4), round(y0 + bb["Height"], 4)]})
     return {"text": " ".join(w["text"] for w in words), "words": words}
+
+
+def enrich_pages(pages: list[dict]) -> list[dict]:
+    """Replace thin/absent PDF text layers with OCR text so scanned docs extract.
+    No-op unless OCR is enabled. Only overwrites when OCR yields more text."""
+    if config.OCR_BACKEND != "textract":
+        return pages
+    for p in pages:
+        if len((p.get("text") or "").strip()) >= config.OCR_TEXT_MIN_CHARS:
+            continue
+        recovered = ocr_image(render_png(p["pdf_bytes"])).get("text", "")
+        if len(recovered.strip()) > len((p.get("text") or "").strip()):
+            p["text"] = recovered
+    return pages
