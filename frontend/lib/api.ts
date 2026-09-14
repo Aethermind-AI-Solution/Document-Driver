@@ -59,3 +59,12 @@ export async function pollDocument(
     await new Promise((r) => setTimeout(r, interval));
   }
 }
+
+export async function fetchImageUrl(path: string): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const r = await fetch(`${API}${path}`, { headers });
+  if (!r.ok) { const e: any = new Error("Image load failed"); e.status = r.status; throw e; }
+  return URL.createObjectURL(await r.blob());
+}
