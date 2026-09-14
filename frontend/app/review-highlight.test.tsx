@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
-import { renderAnomaly } from "./page";
+import { renderAnomaly } from "../lib/anomaly";
 
 describe("anomaly rendering", () => {
   it("renders a string anomaly as-is", () => {

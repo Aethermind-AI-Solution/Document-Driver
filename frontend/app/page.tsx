@@ -4,14 +4,12 @@ import { Activity, ArrowUpRight, Bot, CheckCircle2, CircleDashed, Clock3, FileSe
 import { api, downloadFile, fetchImageUrl, me, pollDocument } from "../lib/api";
 import { canUpload, canReview, isAdmin, type Role } from "../lib/auth";
 import { deriveAgentTimeline, traceToSteps, type AgentStatus, type AgentStep, type TraceEntry } from "../lib/agent-timeline";
+import { renderAnomaly } from "../lib/anomaly";
 import ConfirmDialog from "./components/ConfirmDialog";
 import DocumentViewer from "./components/DocumentViewer";
 type Schema={key:string,name:string,fields:unknown[]}; type Doc={id:number,filename:string,document_type:string,status:string,confidence?:number,upload_date:string,review_required:boolean,processing_time?:number|null,pipeline_trace?:TraceEntry[]|null,anomalies?:(string|{type?:string,message?:string})[]|null,auto_approved?:boolean};
 type AgentEvent={id:number;agent:string;message:string;status:AgentStatus};
 const badges:Record<string,string>={approved:"bg-emerald-50 text-emerald-700",rejected:"bg-rose-50 text-rose-700",review_required:"bg-amber-50 text-amber-700",processed:"bg-blue-50 text-blue-700",error:"bg-red-50 text-red-700",uploaded:"bg-slate-100 text-slate-600",reopened:"bg-violet-50 text-violet-700"};
-export function renderAnomaly(a: string | { message?: string }): string {
-  return typeof a === "string" ? a : (a?.message || "Anomaly");
-}
 export default function Home(){
  const [schemas,setSchemas]=useState<Schema[]>([]),[docs,setDocs]=useState<Doc[]>([]),[type,setType]=useState("auto"),[selected,setSelected]=useState<any>(null),[loading,setLoading]=useState(false),[message,setMessage]=useState(""),[agentEvents,setAgentEvents]=useState<AgentEvent[]>([]),[retrying,setRetrying]=useState<Set<number>>(new Set()); const input=useRef<HTMLInputElement>(null); const activityId=useRef(0);
  const [q,setQ]=useState(""),[statusFilter,setStatusFilter]=useState(""),[offset,setOffset]=useState(0),[total,setTotal]=useState(0),[stats,setStats]=useState<{total:number,review_required:number,avg_processing_time:number|null,field_agreement_rate:number|null,auto_approved:number,auto_approved_reopen_rate:number|null,webhook_failed:number}|null>(null),[autoOnly,setAutoOnly]=useState(false);
