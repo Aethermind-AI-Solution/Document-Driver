@@ -346,6 +346,19 @@ def admin_metrics(db: Session = Depends(get_db), _: User = Depends(auth.require_
                                  "count": len(stuck), "documents": stuck},
             "stage_latency": stage_latency, "sample_size": config.METRICS_RECENT_N}
 
+@app.get("/admin/roi")
+def admin_roi(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    total = db.query(Document).count()
+    auto = db.query(Document).filter(Document.auto_approved.is_(True)).count()
+    reviewed = total - auto
+    review_times = [t for (t,) in db.query(Document.processing_time)
+                    .filter(Document.auto_approved.is_(False),
+                            Document.processing_time.isnot(None)).all()]
+    avg_review = round(sum(review_times) / len(review_times), 2) if review_times else None
+    return {"total": total, "auto_approved": auto, "reviewed": reviewed,
+            "stp_rate": (auto / total) if total else None,
+            "avg_review_seconds": avg_review}
+
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
     doc = db.get(Document, document_id)
