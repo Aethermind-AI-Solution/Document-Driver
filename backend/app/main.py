@@ -3,10 +3,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
-from . import auth, config, mcp_server
+from . import auth, config, mcp_server, storage
 from .logging_config import configure_logging
 from .security import rate_limit
 from .database import Base, engine, get_db
@@ -17,6 +17,7 @@ from .services import all_schema_keys, apply_approval, available_schemas, can_tr
 from .storage import get_storage
 from .webhooks import deliver_webhook
 from . import eval as eval_mod
+from .agents.pages import render_png
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
 config.check_production_config()
@@ -125,7 +126,7 @@ def _to_csv(fields: list[dict]) -> str:
     return stream.getvalue()
 
 def serialize(d: Document):
-    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"pipeline_trace":d.pipeline_trace,"anomalies":d.anomalies,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details,"actor_email":a.actor_email} for a in d.audit_logs]}
+    return {"id":d.id,"filename":d.filename,"document_type":d.document_type,"upload_date":d.upload_date,"status":d.status,"processing_time":d.processing_time,"confidence":d.confidence,"review_required":d.review_required,"pipeline_trace":d.pipeline_trace,"anomalies":d.anomalies,"fields":[{"id":f.id,"field_name":f.field_name,"field_value":f.field_value,"original_value":f.original_value,"confidence":f.confidence,"validated":f.validated,"edited_by_user":f.edited_by_user,"source_quote":f.source_quote,"grounded":f.grounded,"box":f.box} for f in d.extracted_fields],"audit":[{"action":a.action,"timestamp":a.timestamp,"details":a.details,"actor_email":a.actor_email} for a in d.audit_logs]}
 
 def serialize_summary(d: Document):
     return {"id": d.id, "filename": d.filename, "document_type": d.document_type,
@@ -345,11 +346,33 @@ def admin_metrics(db: Session = Depends(get_db), _: User = Depends(auth.require_
                                  "count": len(stuck), "documents": stuck},
             "stage_latency": stage_latency, "sample_size": config.METRICS_RECENT_N}
 
+@app.get("/admin/roi")
+def admin_roi(db: Session = Depends(get_db), _: User = Depends(auth.require_role("admin"))):
+    total = db.query(Document).count()
+    auto = db.query(Document).filter(Document.auto_approved.is_(True)).count()
+    reviewed = total - auto
+    review_times = [t for (t,) in db.query(Document.processing_time)
+                    .filter(Document.auto_approved.is_(False),
+                            Document.processing_time.isnot(None)).all()]
+    avg_review = round(sum(review_times) / len(review_times), 2) if review_times else None
+    return {"total": total, "auto_approved": auto, "reviewed": reviewed,
+            "stp_rate": (auto / total) if total else None,
+            "avg_review_seconds": avg_review}
+
 @app.get("/document/{document_id}")
 def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
     return serialize(doc)
+
+@app.get("/document/{document_id}/image")
+def document_image(document_id: int, db: Session = Depends(get_db),
+                   _: User = Depends(auth.get_current_user)):
+    doc = db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    raw = storage.get_storage().open(doc.stored_path)
+    return Response(content=render_png(raw), media_type="image/png")
 
 @app.put("/document/{document_id}")
 def update_document(document_id: int, payload: DocumentUpdate, background_tasks: BackgroundTasks,

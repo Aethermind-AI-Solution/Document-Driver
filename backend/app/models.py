@@ -59,6 +59,7 @@ class ExtractedField(Base, _TenantMixin):
     edited_by_user: Mapped[bool] = mapped_column(Boolean, default=False)
     source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     grounded: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    box: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 class AuditLog(Base, _TenantMixin):
     __tablename__ = "audit_logs"
