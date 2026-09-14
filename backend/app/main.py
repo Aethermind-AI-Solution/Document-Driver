@@ -3,10 +3,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 from .config import CORS_ORIGINS
-from . import auth, config, mcp_server
+from . import auth, config, mcp_server, storage
 from .logging_config import configure_logging
 from .security import rate_limit
 from .database import Base, engine, get_db
@@ -17,6 +17,7 @@ from .services import all_schema_keys, apply_approval, available_schemas, can_tr
 from .storage import get_storage
 from .webhooks import deliver_webhook
 from . import eval as eval_mod
+from .agents.pages import render_png
 
 # Fail fast if a production (non-sqlite) deploy is missing a strong JWT_SECRET.
 config.check_production_config()
@@ -350,6 +351,15 @@ def document(document_id: int, db: Session = Depends(get_db), _: User = Depends(
     doc = db.get(Document, document_id)
     if not doc: raise HTTPException(404, "Document not found")
     return serialize(doc)
+
+@app.get("/document/{document_id}/image")
+def document_image(document_id: int, db: Session = Depends(get_db),
+                   _: User = Depends(auth.get_current_user)):
+    doc = db.get(Document, document_id)
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    raw = storage.get_storage().open(doc.stored_path)
+    return Response(content=render_png(raw), media_type="image/png")
 
 @app.put("/document/{document_id}")
 def update_document(document_id: int, payload: DocumentUpdate, background_tasks: BackgroundTasks,
