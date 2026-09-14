@@ -1,0 +1,8 @@
+[
+  {"doc": "sample_01.png", "document_type": "invoice",
+   "fields": {"vendor_name": "Acme Supplies Pvt Ltd", "invoice_number": "INV-1042",
+              "invoice_date": "2026-07-01", "total": "11800.00"}},
+  {"doc": "sample_02.png", "document_type": "invoice",
+   "fields": {"vendor_name": "Globex Traders", "invoice_number": "G-5581",
+              "invoice_date": "2026-07-03", "total": "4720.00"}}
+]
