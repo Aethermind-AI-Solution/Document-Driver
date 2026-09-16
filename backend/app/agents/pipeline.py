@@ -1,3 +1,4 @@
+import re
 import time
 import logging
 from pathlib import Path
@@ -27,6 +28,19 @@ def detect_duplicate(db: Session, document: Document) -> list[dict]:
     return [{"type": "duplicate_invoice",
              "message": f"Possible duplicate of {dup.filename}",
              "duplicate_of": dup.id}]
+
+
+_VALIDATOR_DUP_RE = re.compile(r"Possible duplicate of #(\d+)")
+
+
+def _dedupe_duplicate_anomalies(existing: list, dup_anomalies: list[dict]) -> list[dict]:
+    """Drop W3 fingerprint duplicate anomalies whose target doc was already
+    flagged by the validator's '#<id>' duplicate string, so an identical
+    re-upload isn't reported twice. Both detectors are kept (they catch
+    different cases) — only the redundant chip for the SAME doc is removed."""
+    already = {int(m.group(1)) for s in existing if isinstance(s, str)
+               for m in (_VALIDATOR_DUP_RE.search(s),) if m}
+    return [d for d in dup_anomalies if d.get("duplicate_of") not in already]
 
 
 def compute_field_boxes(fields: list[dict], pages: list[dict]) -> dict:
@@ -85,7 +99,7 @@ async def run_pipeline(db: Session, document: Document, hint_type: str, actor=No
             db.add(ExtractedField(document_id=document.id, original_value=f["field_value"],
                                   org_id=document.org_id, box=field_boxes.get(f["field_name"]), **f))
         document.fingerprint = services.compute_fingerprint(ctx.fields)
-        dup_anomalies = detect_duplicate(db, document)
+        dup_anomalies = _dedupe_duplicate_anomalies(ctx.anomalies or [], detect_duplicate(db, document))
         document.pipeline_trace = [asdict(s) for s in ctx.trace]
         document.anomalies = (ctx.anomalies or []) + dup_anomalies or None
         document.confidence = services.document_confidence(ctx.fields, ctx.schema["fields"])
