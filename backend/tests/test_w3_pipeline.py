@@ -101,3 +101,21 @@ def test_find_duplicate_does_not_match_across_orgs(db_session):
     db_session.add(org2_doc); db_session.commit()
 
     assert services.find_duplicate(db_session, org2_doc) is None
+
+
+def test_dedupe_suppresses_w3_dup_when_validator_flagged_same_doc():
+    dup = [{"type": "duplicate_invoice", "message": "Possible duplicate of a.png", "duplicate_of": 5}]
+    out = pipeline._dedupe_duplicate_anomalies(["Possible duplicate of #5"], dup)
+    assert out == []
+
+
+def test_dedupe_keeps_w3_dup_when_validator_flagged_different_doc():
+    dup = [{"type": "duplicate_invoice", "message": "Possible duplicate of a.png", "duplicate_of": 7}]
+    out = pipeline._dedupe_duplicate_anomalies(["Possible duplicate of #5"], dup)
+    assert out == dup
+
+
+def test_dedupe_keeps_w3_dup_when_no_validator_dup():
+    dup = [{"type": "duplicate_invoice", "message": "m", "duplicate_of": 5}]
+    assert pipeline._dedupe_duplicate_anomalies(["Subtotal 1 + tax 1 != total 3"], dup) == dup
+    assert pipeline._dedupe_duplicate_anomalies([], dup) == dup
