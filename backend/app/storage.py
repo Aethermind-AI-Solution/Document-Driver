@@ -38,7 +38,22 @@ class S3Storage:
             config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
 
     def save(self, key: str, data: bytes) -> str:
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+        from botocore.exceptions import ClientError
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+        except ClientError as e:
+            # S3-compatible providers (R2) can return an error body botocore
+            # can't parse, yielding an empty "An error occurred ()". Surface the
+            # HTTP status/code/bucket so the failure is actually diagnosable.
+            meta = e.response.get("ResponseMetadata", {})
+            err = e.response.get("Error", {})
+            status = meta.get("HTTPStatusCode", "?")
+            code = err.get("Code") or "<empty>"
+            msg = err.get("Message") or "<empty>"
+            raise RuntimeError(
+                f"S3 PutObject failed: HTTP {status}, code={code}, message={msg}, "
+                f"bucket={self.bucket}"
+            ) from e
         return key
 
     def open(self, key: str) -> bytes:
