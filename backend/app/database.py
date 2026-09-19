@@ -3,8 +3,17 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker, with_loader_criteria
 from sqlalchemy.orm import Session as _Session
 from .config import DATABASE_URL
 
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+connect_args = {"check_same_thread": False} if _is_sqlite else {}
+# pool_pre_ping validates a pooled connection (lightweight SELECT 1) on checkout
+# and transparently reconnects a dead one — required for serverless Postgres
+# (Neon) which idle-closes connections, otherwise the next query fails with
+# "SSL connection has been closed unexpectedly". pool_recycle proactively
+# retires connections before that idle cutoff. Both no-op harmlessly on SQLite.
+_engine_kwargs = {"connect_args": connect_args, "pool_pre_ping": True}
+if not _is_sqlite:
+    _engine_kwargs["pool_recycle"] = 300
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 
 def enable_sqlite_pragmas(target_engine):
